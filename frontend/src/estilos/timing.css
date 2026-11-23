@@ -171,6 +171,10 @@
   background: transparent; text-align: left; vertical-align: middle;
 }
 .timing-tabla .lst thead th { padding-block: 11px; background: #f9fbfc; color: var(--timing-suave); font-size: 11px; letter-spacing: .045em; text-transform: uppercase; }
+.timing-tabla-tareas th button { border: 0; background: transparent; padding: 0; color: inherit; font: inherit; text-transform: inherit; text-align: left; cursor: pointer; }
+.timing-tabla-tareas th button:hover, .timing-tabla-tareas th[aria-sort] button { color: var(--timing-acento); }
+.timing-tabla-tareas .timing-fila-resumen { min-width: 142px; }
+.timing-numero { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .timing-tabla .lst tbody tr:last-child td { border-bottom: 0; }
 .timing-tabla .lst td:first-child { font-variant-numeric: tabular-nums; }
 .timing-tabla .lst .seleccionada td { background: var(--timing-menta); }
@@ -197,8 +201,11 @@
 .timing-estado.en-proceso { background: #fff2d8; color: #795314; }
 .timing-estado.cancelada { background: #fae9ec; color: var(--timing-peligro); }
 .timing-mas-menu button.timing-peligro { color: var(--timing-peligro); }
-.timing-descripcion { margin: 0 0 19px; white-space: pre-wrap; font-size: clamp(17px, 1.35vw, 21px); line-height: 1.4; font-weight: 630; }
-.timing-acciones-tarea { position: relative; margin: 0 0 24px; }
+.timing-texto-tarea { margin-bottom: 14px; }
+.timing-descripcion { margin: 0; white-space: pre-wrap; font-size: 14px; line-height: 1.46; font-weight: 400; }
+.timing-descripcion.resumida { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.timing-enlace { padding: 4px 0; border: 0; background: transparent; color: var(--timing-acento); font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.timing-acciones-tarea { position: relative; margin: 0 0 17px; align-items: flex-end; }
 .timing-mas-menu { right: auto; left: 0; }
 .timing-mas summary { display: grid; place-items: center; cursor: pointer; list-style: none; min-width: 36px; }
 .timing-mas summary::-webkit-details-marker { display: none; }
@@ -227,6 +234,9 @@
   .timing-contenido.con-detalle { grid-template-columns: minmax(0, 1fr); }
   .timing-contenido.con-detalle .timing-detalle { grid-row: 1; }
 }
+@media (min-width: 1081px) {
+  .timing-workspace .timing-detalle { max-height: max(40vh, calc(100dvh - 240px)); overflow: auto; }
+}
 @media (max-width: 720px) {
   .timing-shell header.topbar { gap: 9px 14px; padding: 10px 16px; }
   .timing-shell .topbar-apps .apps-selector { order: 0; }
@@ -239,7 +249,6 @@
   .timing-titulo { flex-wrap: wrap; }
 }
 @media (max-width: 470px) {
-  .timing-tabla-tareas .timing-columna-secundaria { display: none; }
   .timing-tabla .lst td, .timing-tabla .lst th { padding-inline: 8px; }
   .timing-busqueda { justify-content: flex-start; min-width: 100%; }
   .timing-busqueda input[type=search] { max-width: none; }

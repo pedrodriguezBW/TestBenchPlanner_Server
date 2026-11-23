@@ -295,8 +295,9 @@ public class ConfiguracionAlmacenes {
 
         @Bean
         public AlmacenCatalogos almacenCatalogos(com.borgwarner.tbp.infraestructura.postgresql.BaseDatos bd,
-                                                 @Value("${planner.listas.permitir-vacias:false}") boolean permitirVacias) {
-            return new com.borgwarner.tbp.infraestructura.postgresql.CatalogosPostgres(bd, permitirVacias);
+                                                 @Value("${planner.listas.permitir-vacias:false}") boolean permitirVacias,
+                                                 PropiedadesPlanner propiedades) {
+            return new com.borgwarner.tbp.infraestructura.postgresql.CatalogosPostgres(bd, permitirVacias, propiedades.servidor().activo());
         }
 
         @Bean

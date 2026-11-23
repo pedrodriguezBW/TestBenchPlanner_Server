@@ -95,6 +95,7 @@ class TimingPostgresTest {
         assertEquals("readonly", tecnico.leer("/api/v1/sesion").path("rol").asText());
         assertEquals("tecnico", tecnico.leer("/api/v1/sesion").path("timingRoles").get(0).asText());
         estado(403, tecnico.get(API + "/tareas?vista=planificacion"));
+        assertTrue(admin.leer(API + "/opciones").path("personas").toString().contains(SIN_PERFIL));
         assertEquals("00042", admin.leer("/api/v1/catalogos").path("projectNumbers").path("00042 - Proyecto de prueba").asText());
         estado(200, admin.json("PUT", API + "/equipos", objeto().put("clase", "camara").put("nombre", "Cámara de prueba")));
 
@@ -111,6 +112,7 @@ class TimingPostgresTest {
         tarea = hecho(operacion(responsable, tarea, "disponibilidad", objeto().put("disponible", true)));
         estado(409, operacion(responsable, antes, "editar", objeto().put("descripcion", "Versión desfasada")));
         estado(403, operacion(responsable, tarea, "planificar", objeto().put("tecnico", TECNICO)));
+        estado(403, operacion(responsable, tarea, "estado", objeto().put("estado", "en-proceso")));
         tarea = hecho(operacion(admin, tarea, "planificar", objeto().put("tecnico", TECNICO).put("diaTrabajo", "2026-11-23")
                 .put("prioridad", -0.5).put("ordenDiario", 0.3)));
         JsonNode cola = tecnico.leer(API + "/tareas?vista=cola");
@@ -177,6 +179,41 @@ class TimingPostgresTest {
         hecho(operacion(admin, tarea, "planificar", objeto().put("prioridad", 22)));
         assertEquals(1, hecho(admin.xlsx(API + "/importacion?simular=false", xlsx)).path("conflictos").asInt());
         assertEquals(22, admin.leer(API + "/tareas/" + activa).path("prioridad").asInt());
+    }
+
+    @Test
+    void conservaEstadoImportadoYPermiteConciliarUnResponsableSinPerfil() throws IOException {
+        var admin = entrar(ADMIN);
+        var excel = libro(List.of(
+                List.of("910101", "TEST-PROCESO", "En proceso", "Proyecto sin conciliar", "00317", "TEST",
+                        "Tarea en proceso", "Admin sin Timing", "Nombre sin cuenta", "2", "0"),
+                List.of("910102", "TEST-DISPONIBLE", "Sí", "Proyecto sin conciliar", "00317", "TEST",
+                        "Tarea disponible", "Nombre sin cuenta", "", "2", "0")));
+        hecho(admin.xlsx(API + "/importacion?simular=false", excel));
+        long activa = bd.jdbc().queryForObject("SELECT id FROM timing_tarea WHERE origen_id = 910101", Long.class);
+        long otra = bd.jdbc().queryForObject("SELECT id FROM timing_tarea WHERE origen_id = 910102", Long.class);
+        var tarea = admin.leer(API + "/tareas/" + activa);
+        assertEquals("en-proceso", tarea.path("estado").asText());
+        assertTrue(tarea.path("disponible").asBoolean());
+        assertEquals(SIN_PERFIL, tarea.path("responsable").asText());
+        assertTrue(admin.leer(API + "/tareas/" + otra).path("disponible").asBoolean());
+
+        // Recrear el estado de la primera versión para comprobar la actualización de instalaciones existentes.
+        bd.jdbc().update("UPDATE timing_tarea SET datos = datos || ?::jsonb WHERE id IN (?, ?)",
+                "{\"estado\":\"pendiente\",\"disponible\":false}", activa, otra);
+        bd.jdbc().update("UPDATE timing_tarea SET version = version + 1 WHERE id = ?", otra);
+        var recurso = new org.springframework.core.io.ClassPathResource("db/migration/V7__timing_disponibilidad_importada.sql");
+        bd.jdbc().execute(recurso.getContentAsString(StandardCharsets.UTF_8));
+        tarea = admin.leer(API + "/tareas/" + activa);
+        assertEquals("en-proceso", tarea.path("estado").asText());
+        assertFalse(admin.leer(API + "/tareas/" + otra).path("disponible").asBoolean());
+        assertEquals(1, hecho(admin.xlsx(API + "/importacion?simular=false", excel)).path("sinCambios").asInt());
+
+        var editada = hecho(operacion(admin, tarea, "editar", objeto().put("responsable", ADMIN)));
+        assertEquals(ADMIN, editada.path("responsable").asText());
+        var cambiada = hecho(operacion(admin, editada, "estado", objeto().put("estado", "pendiente").put("disponible", false)));
+        assertEquals("pendiente", cambiada.path("estado").asText());
+        assertFalse(cambiada.path("disponible").asBoolean());
     }
 
     @Test
@@ -247,7 +284,11 @@ class TimingPostgresTest {
             assertThat(pagina.locator(".timing-filtros-panel")).isHidden();
             pagina.locator(".timing-filtros-extra summary").click();
             assertThat(pagina.getByLabel("Disponibilidad")).isVisible();
+            assertThat(pagina.locator("#timing-filtro-cuenta option[value='00042']")).hasCount(1);
+            assertThat(pagina.locator("#timing-filtro-responsable option[value='Admin sin Timing']")).hasCount(1);
             pagina.locator(".timing-filtros-extra summary").click();
+            pagina.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("N.º de proyecto")).click();
+            assertThat(pagina.locator("th[aria-sort=ascending]")).containsText("N.º de proyecto");
             assertThat(pagina.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Cancelar tarea").setExact(true))).isHidden();
             pagina.getByLabel("Más acciones").click();
             assertThat(pagina.getByRole(AriaRole.BUTTON, new Page.GetByRoleOptions().setName("Cancelar tarea").setExact(true))).isVisible();

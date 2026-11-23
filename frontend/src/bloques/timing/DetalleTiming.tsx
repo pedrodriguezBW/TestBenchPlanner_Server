@@ -6,7 +6,7 @@ import { CAMARA_CLIMATICA, tienePerfil, type AccionTiming, type OpcionesTiming, 
 const ESTADOS = { pendiente: 'Pendiente', 'en-proceso': 'En proceso', cerrada: 'Cerrada', cancelada: 'Cancelada' };
 const ACCIONES: Record<string, string> = {
   creada: 'Creada', duplicada: 'Duplicada', editar: 'Datos editados', disponibilidad: 'Disponibilidad actualizada',
-  planificar: 'Planificación actualizada', iniciar: 'Iniciada', avance: 'Avance registrado',
+  planificar: 'Planificación actualizada', estado: 'Estado actualizado', iniciar: 'Iniciada', avance: 'Avance registrado',
   cerrar: 'Cerrada', reabrir: 'Reabierta', cancelar: 'Cancelada',
 };
 const TITULOS_FORMULARIO = {
@@ -59,7 +59,7 @@ export function EditorTarea({ tarea, opciones, responsableEditable, ocupado, gua
     <div className="timing-form-grid">
       {responsableEditable && <Campo nombre="Responsable">
         <select className="f" name="responsable" defaultValue={tarea?.responsable ?? ''}>
-          <option value="">Sin determinar</option>
+          <option value="">{tarea?.responsableOrigen && !tarea.responsable ? tarea.responsableOrigen + ' (sin vincular)' : 'Sin determinar'}</option>
           {tarea?.responsable && !opciones.personas.some((p) => p.email === tarea.responsable && p.responsable) &&
             <option value={tarea.responsable}>{tarea.responsableNombre || tarea.responsableOrigen || tarea.responsable}</option>}
           {opciones.personas.filter((p) => p.responsable).map((p) => <option key={p.email} value={p.email}>{p.nombre}</option>)}
@@ -118,6 +118,7 @@ export function DetalleTiming({ tarea, sesion, opciones, ocupado, operar, volver
 }) {
   const [formulario, setFormulario] = useState<FormularioTarea | null>(null);
   const [horasCierre, setHorasCierre] = useState(String(tarea.horasRegistradas ?? 0));
+  const [descripcionCompleta, setDescripcionCompleta] = useState(false);
   const coordina = tienePerfil(sesion, 'coordinador');
   const gestiona = coordina || sesion.esAdmin;
   const propia = tienePerfil(sesion, 'solicitante') && sesion.email === tarea.responsable;
@@ -128,7 +129,9 @@ export function DetalleTiming({ tarea, sesion, opciones, ocupado, operar, volver
   const puedeCancelar = abierta && (coordina || (propia && pendiente && !tarea.disponible));
   const puedeIniciar = asignada && pendiente && tarea.disponible;
   const puedeRegistrar = asignada && tarea.estado === 'en-proceso' && tarea.disponible;
-  const puedePreparar = editar && pendiente && !tarea.disponible && !coordina;
+  const puedePreparar = editar && pendiente && !tarea.disponible && !gestiona;
+  const descripcion = tarea.descripcion ?? '';
+  const resumenNecesario = descripcion.length > 155 || descripcion.split(/\r?\n/).length > 3;
   const ejecutar = (accion: AccionTiming, datos?: object) => { void operar(accion, datos).then((ok) => { if (ok) setFormulario(null); }); };
   const enviar = (e: FormEvent<HTMLFormElement>, accion: AccionTiming) => {
     e.preventDefault();
@@ -155,23 +158,38 @@ export function DetalleTiming({ tarea, sesion, opciones, ocupado, operar, volver
     </header>
     {formulario === 'editar' ? <EditorTarea tarea={tarea} opciones={opciones} responsableEditable={gestiona} ocupado={ocupado}
       guardar={(datos) => ejecutar('editar', datos)} salir={() => setFormulario(null)} /> : <>
-      {tarea.descripcion && <p className="timing-descripcion">{tarea.descripcion}</p>}
+      {descripcion && <div className="timing-texto-tarea">
+        <p className={'timing-descripcion' + (resumenNecesario && !descripcionCompleta ? ' resumida' : '')}>{descripcion}</p>
+        {resumenNecesario && <button type="button" className="timing-enlace" aria-expanded={descripcionCompleta}
+          onClick={() => setDescripcionCompleta(!descripcionCompleta)}>{descripcionCompleta ? 'Ver menos' : 'Ver texto completo'}</button>}
+      </div>}
       {!formulario && <div className="timing-acciones timing-acciones-tarea">
+        {gestiona && abierta && <Campo nombre="Estado">
+          <select className="f" disabled={ocupado}
+            value={tarea.estado === 'en-proceso' ? 'en-proceso' : tarea.disponible ? 'disponible' : 'no-disponible'}
+            onChange={(e) => ejecutar('estado', { estado: e.target.value === 'en-proceso' ? 'en-proceso' : 'pendiente',
+              disponible: e.target.value !== 'no-disponible' })}>
+            <option value="no-disponible">No disponible</option>
+            <option value="disponible">Disponible</option>
+            <option value="en-proceso">En proceso</option>
+          </select>
+        </Campo>}
         {puedeIniciar && <button className="btn" disabled={ocupado} onClick={() => ejecutar('iniciar')}>Iniciar tarea</button>}
         {puedeRegistrar && <>
           <button className="btn" disabled={ocupado} onClick={() => setFormulario('avance')}>Registrar avance</button>
-          <button className="btn ghost" disabled={ocupado} onClick={() => setFormulario('cerrar')}>Cerrar tarea</button>
         </>}
+        {(puedeRegistrar || (gestiona && tarea.estado === 'en-proceso' && tarea.disponible)) &&
+          <button className="btn ghost" disabled={ocupado} onClick={() => setFormulario('cerrar')}>Cerrar tarea</button>}
         {abierta && coordina && <button className={puedeIniciar || puedeRegistrar ? 'btn ghost' : 'btn'} disabled={ocupado} onClick={() => setFormulario('planificar')}>
           {tarea.tecnico ? 'Planificar' : 'Asignar'}
         </button>}
         {puedePreparar && <button className="btn" disabled={ocupado} onClick={() => ejecutar('disponibilidad', { disponible: true })}>Marcar disponible</button>}
         {editar && <button className="btn ghost" disabled={ocupado} onClick={() => setFormulario('editar')}>Editar</button>}
         {gestiona && tarea.estado === 'cerrada' && <button className="btn ghost" disabled={ocupado} onClick={() => setFormulario('reabrir')}>Reabrir</button>}
-        {((editar && pendiente && !puedePreparar) || propia || puedeCancelar) && <details className="timing-mas">
+        {((editar && pendiente && !gestiona && !puedePreparar) || propia || puedeCancelar) && <details className="timing-mas">
           <summary className="btn ghost" aria-label="Más acciones" title="Más acciones">···</summary>
           <div className="timing-mas-menu">
-            {editar && pendiente && !puedePreparar && <button disabled={ocupado} onClick={() => ejecutar('disponibilidad', { disponible: !tarea.disponible })}>
+            {editar && pendiente && !gestiona && !puedePreparar && <button disabled={ocupado} onClick={() => ejecutar('disponibilidad', { disponible: !tarea.disponible })}>
               {tarea.disponible ? 'Marcar no disponible' : 'Marcar disponible'}
             </button>}
             {propia && <button disabled={ocupado} onClick={() => ejecutar('duplicar')}>Duplicar</button>}

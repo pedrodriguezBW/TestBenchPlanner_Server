@@ -39,10 +39,16 @@ public class CatalogosPostgres implements AlmacenCatalogos {
 
     private final BaseDatos bd;
     private final boolean permitirVacias;
+    private final boolean modoServidor;
 
     public CatalogosPostgres(BaseDatos bd, boolean permitirVacias) {
+        this(bd, permitirVacias, false);
+    }
+
+    public CatalogosPostgres(BaseDatos bd, boolean permitirVacias, boolean modoServidor) {
         this.bd = bd;
         this.permitirVacias = permitirVacias;
+        this.modoServidor = modoServidor;
     }
 
     @Override
@@ -59,7 +65,7 @@ public class CatalogosPostgres implements AlmacenCatalogos {
         });
         ArrayNode proyectos = salida.putArray("projects");
         ObjectNode ordenes = salida.putObject("projectOrders");
-        ObjectNode numeros = salida.putObject("projectNumbers");
+        ObjectNode numeros = modoServidor ? salida.putObject("projectNumbers") : null;
         bd.jdbc().query("SELECT titulo, orden_facturacion, numero_proyecto FROM proyecto" + ORDEN_SEQ, (java.sql.ResultSet rs) -> {
             while (rs.next()) {
                 proyectos.add(rs.getString(1));
@@ -67,7 +73,7 @@ public class CatalogosPostgres implements AlmacenCatalogos {
                 if (!orden.isEmpty()) {
                     ordenes.put(rs.getString(1), orden);
                 }
-                if (rs.getString(3) != null) {
+                if (numeros != null && rs.getString(3) != null) {
                     numeros.put(rs.getString(1), rs.getString(3));
                 }
             }

@@ -108,8 +108,8 @@ public class ImportadorTiming {
     private static ObjectNode convertir(Map<String, String> fila, Referencias ref, ArrayNode avisos, long id) {
         String nombreResponsable = valor(fila, "Responsable");
         String nombreTecnico = valor(fila, "Asignado a");
-        String responsable = ref.email(nombreResponsable, "solicitante");
-        String tecnico = ref.email(nombreTecnico, "tecnico");
+        String responsable = ref.email(nombreResponsable);
+        String tecnico = ref.email(nombreTecnico);
         String nombreProyecto = valor(fila, "Proyecto");
         String cuenta = valor(fila, "Cuenta Proyecto");
         Long proyecto = ref.proyecto(nombreProyecto, cuenta);
@@ -137,10 +137,8 @@ public class ImportadorTiming {
             datos.put("estado", "cerrada");
         } else {
             List<String> faltan = TimingPostgres.faltantes(datos);
-            boolean completa = faltan.isEmpty() && (nombreTecnico.isEmpty() || !tecnico.isEmpty());
-            if (!completa) aviso(avisos, id, "Campos pendientes: " + String.join(", ", faltan) + ".");
-            boolean disponible = completa && ("si".equals(disp) || enProceso);
-            datos.put("disponible", disponible).put("estado", disponible && enProceso ? "en-proceso" : "pendiente");
+            if (!faltan.isEmpty()) aviso(avisos, id, "Campos pendientes: " + String.join(", ", faltan) + ".");
+            datos.put("disponible", "si".equals(disp) || enProceso).put("estado", enProceso ? "en-proceso" : "pendiente");
         }
         return datos;
     }
@@ -206,11 +204,10 @@ public class ImportadorTiming {
         private final Map<String, Set<String>> nuevos = new HashMap<>();
 
         private Referencias(BaseDatos bd) {
-            bd.jdbc().query("SELECT u.email, u.titulo, u.nombre_responsable, p.perfil FROM usuario u "
-                    + "JOIN timing_perfil p ON u.email = p.email", (ResultSet rs) -> {
+            bd.jdbc().query("SELECT email, titulo, nombre_responsable FROM usuario", (ResultSet rs) -> {
                 String email = rs.getString(1);
                 for (String alias : List.of(email, rs.getString(2), rs.getString(3) == null ? "" : rs.getString(3))) {
-                    if (!alias.isBlank()) usuarios.computeIfAbsent(rs.getString(4) + "/" + clave(alias),
+                    if (!alias.isBlank()) usuarios.computeIfAbsent(clave(alias),
                             k -> new LinkedHashSet<>()).add(email);
                 }
             });
@@ -224,8 +221,8 @@ public class ImportadorTiming {
             });
         }
 
-        private String email(String nombre, String perfil) {
-            Set<String> coincidencias = usuarios.getOrDefault(perfil + "/" + clave(nombre), Set.of());
+        private String email(String nombre) {
+            Set<String> coincidencias = usuarios.getOrDefault(clave(nombre), Set.of());
             return coincidencias.size() == 1 ? coincidencias.iterator().next() : "";
         }
 

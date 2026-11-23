@@ -1,9 +1,9 @@
 
-import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { Sesion } from '../../api/tipos';
 import { timingApi, type InformeTiming } from './cliente';
 import { Campo, DetalleTiming, EditorTarea, EstadoTiming } from './DetalleTiming';
-import { CAMARA_CLIMATICA, enlaceTiming, ordenarCola, tienePerfil, VISTAS_TIMING, type EquipoTiming, type OpcionesTiming, type TareaTiming, type VistaTiming } from './modelo';
+import { CAMARA_CLIMATICA, enlaceTiming, ordenarCola, ordenarTareas, sugerenciasTiming, responsableTiming, tecnicoTiming, tienePerfil, VISTAS_TIMING, type ColumnaTiming, type OrdenTiming, type EquipoTiming, type OpcionesTiming, type TareaTiming, type VistaTiming } from './modelo';
 
 const errorTexto = (error: unknown) => error instanceof Error ? error.message : String(error);
 const TAMANO_PAGINA = 35;
@@ -21,6 +21,7 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
   const [nueva, setNueva] = useState(false);
   const [grupo, setGrupo] = useState<'analisis' | 'bancos'>('analisis');
   const [pagina, setPagina] = useState(0);
+  const [orden, setOrden] = useState<OrdenTiming>();
   const [filtros, setFiltros] = useState(FILTROS_VACIOS);
   const [diaElegido, setDiaElegido] = useState('');
   const workspace = useRef<HTMLElement>(null);
@@ -56,6 +57,7 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
   useEffect(() => {
     setNueva(false);
     setPagina(0);
+    setOrden(undefined);
     setError('');
     setFiltros(FILTROS_VACIOS);
   }, [vista]);
@@ -92,6 +94,8 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
   };
 
   const visibles = datos?.vista === vista ? datos.tareas : [];
+  const sugerencias = useMemo(() => sugerenciasTiming(datos?.vista === vista ? datos.tareas : [], opciones), [datos, vista, opciones]);
+  const nombresProyecto = useMemo(() => new Map(opciones?.proyectos.map((p) => [p.id, p.nombre])), [opciones]);
   const dia = diaElegido || opciones?.hoy || '';
   const busca = filtros.texto.toLocaleLowerCase('es-ES').trim();
   const porTexto = (valor?: string) => valor?.toLocaleLowerCase('es-ES').includes(busca);
@@ -101,12 +105,13 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
     if (busca && !porTexto(t.codigo) && !porTexto(t.descripcion) && !porTexto(String(t.origenId ?? t.id))) return false;
     if (filtros.tipo && t.tipo !== filtros.tipo) return false;
     if (filtros.disponibilidad && (filtros.disponibilidad === 'si') !== t.disponible) return false;
-    return coincide(filtros.responsable, t.responsableNombre || t.responsableOrigen || t.responsable)
-      && coincide(filtros.tecnico, t.tecnicoNombre || t.tecnicoOrigen || t.tecnico)
-      && coincide(filtros.proyecto, t.proyecto) && coincide(filtros.cuenta, t.cuenta)
+    return coincide(filtros.responsable, responsableTiming(t))
+      && coincide(filtros.tecnico, tecnicoTiming(t))
+      && (coincide(filtros.proyecto, t.proyecto) || coincide(filtros.proyecto, nombresProyecto.get(t.proyectoId ?? 0)))
+      && coincide(filtros.cuenta, t.cuenta)
       && coincide(filtros.banco, t.banco);
   });
-  const ordenadas = vista === 'cola' ? ordenarCola(filtradas, dia) : filtradas;
+  const ordenadas = orden ? ordenarTareas(filtradas, orden) : vista === 'cola' ? ordenarCola(filtradas, dia) : filtradas;
   const paginas = Math.max(1, Math.ceil(ordenadas.length / TAMANO_PAGINA));
   const paginaVisible = Math.min(pagina, paginas - 1);
   const filas = ordenadas.slice(paginaVisible * TAMANO_PAGINA, (paginaVisible + 1) * TAMANO_PAGINA);
@@ -118,6 +123,18 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
   const { texto: _busqueda, ...adicionales } = filtros;
   const activos = Object.values(adicionales).filter(Boolean).length;
   const grupoCola = (t: TareaTiming) => t.diaTrabajo === dia ? 'Trabajo del día' : !t.diaTrabajo ? 'Pendientes sin programar' : 'Otras fechas';
+  const esCola = vista === 'cola';
+  const columnas = esCola ? 8 : 6;
+  const cabecera = (columna: ColumnaTiming, etiqueta: string) => {
+    const activa = orden?.columna === columna;
+    const porDefecto = !orden && !esCola && columna === 'prioridad';
+    const direccion = activa && orden.descendente ? 'descending' : 'ascending';
+    return <th scope="col" aria-sort={activa || porDefecto ? direccion : undefined}><button type="button"
+      onClick={() => {
+        setOrden({ columna, descendente: activa ? !orden.descendente : porDefecto });
+        setPagina(0);
+      }}>{etiqueta}<span aria-hidden="true">{activa || porDefecto ? direccion === 'descending' ? ' ↓' : ' ↑' : ' ↕'}</span></button></th>;
+  };
 
   useEffect(() => {
     if (nueva || seleccion) {
@@ -165,9 +182,11 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
                     onChange={(e) => filtro('disponibilidad', e.target.value)}>
                     <option value="">Todas</option><option value="si">Disponible</option><option value="no">No disponible</option>
                   </select></Campo>}
-                  {vista !== 'cola' && ([['proyecto', 'Proyecto'], ['cuenta', 'Cuenta'], ['responsable', 'Responsable'], ['tecnico', 'Técnico'], ['banco', 'Banco']] as const)
+                  {([['proyecto', 'Proyecto'], ['cuenta', 'N.º de proyecto'], ['responsable', 'Responsable'], ['tecnico', 'Técnico'], ['banco', 'Banco']] as const)
                     .map(([campo, etiqueta]) => <Campo key={campo} nombre={etiqueta}><input className="f" value={filtros[campo]}
-                      onChange={(e) => filtro(campo, e.target.value)} /></Campo>)}
+                      list={'timing-filtro-' + campo} onChange={(e) => filtro(campo, e.target.value)} />
+                      <datalist id={'timing-filtro-' + campo}>{sugerencias[campo].map((valor) => <option key={valor} value={valor} />)}</datalist>
+                    </Campo>)}
                 </div>
                 {activos > 0 && <button className="btn ghost sm" onClick={() => { setFiltros({ ...FILTROS_VACIOS, texto: filtros.texto }); setPagina(0); }}>Limpiar filtros</button>}
               </div>
@@ -177,29 +196,35 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
         </div>
         <div className="timing-tabla">
           <table className="lst timing-tabla-tareas">
-            <thead><tr><th scope="col">{vista === 'cola' ? 'Orden' : 'Prioridad'}</th><th scope="col">Tarea</th>
-              <th scope="col" className="timing-columna-secundaria">{vista === 'cola' ? 'Día' : 'Técnico'}</th><th scope="col">Estado</th></tr></thead>
+            <thead><tr>{esCola && cabecera('ordenDiario', 'Orden diario')}{cabecera('prioridad', 'Prioridad')}<th scope="col">Tarea</th>
+              {cabecera('cuenta', 'N.º de proyecto')}{cabecera('tecnico', 'Técnico')}{cabecera('responsable', 'Responsable')}
+              {esCola && <th scope="col">Día</th>}{cabecera('estado', 'Estado')}</tr></thead>
             <tbody>
               {filas.map((tarea, i) => <Fragment key={tarea.id}>
-                {vista === 'cola' && (i === 0 || grupoCola(tarea) !== grupoCola(filas[i - 1])) &&
-                  <tr className="timing-grupo"><th colSpan={4}>{grupoCola(tarea)}</th></tr>}
+                {esCola && !orden && (i === 0 || grupoCola(tarea) !== grupoCola(filas[i - 1])) &&
+                  <tr className="timing-grupo"><th colSpan={columnas}>{grupoCola(tarea)}</th></tr>}
                 <tr className={id === tarea.id && !nueva ? 'seleccionada' : ''}>
-                  <td>{(vista === 'cola' ? tarea.ordenDiario : tarea.prioridad) ?? '—'}</td>
+                  {esCola && <td>{tarea.ordenDiario ?? '—'}</td>}
+                  <td>{tarea.prioridad ?? '—'}</td>
                   <td><a href={enlaceTiming(vista, tarea.id)} aria-current={id === tarea.id ? 'true' : undefined} onClick={() => setNueva(false)}>
                       <span className="timing-fila-resumen">{tarea.descripcion || tarea.codigo}</span>
                       <span className="timing-fila-info">{[tarea.descripcion && tarea.codigo, tarea.proyecto, tarea.banco].filter(Boolean).join(' · ')}</span>
                     </a>
                   </td>
-                  <td className="timing-columna-secundaria">{(vista === 'cola' ? tarea.diaTrabajo : tarea.tecnicoNombre || tarea.tecnicoOrigen || tarea.tecnico) || '—'}</td>
+                  <td className="timing-numero">{tarea.cuenta || '—'}</td>
+                  <td>{tecnicoTiming(tarea) || '—'}</td>
+                  <td>{responsableTiming(tarea) || '—'}</td>
+                  {esCola && <td>{tarea.diaTrabajo || '—'}</td>}
                   <td><EstadoTiming tarea={tarea} /></td>
                 </tr>
               </Fragment>)}
-              {!filas.length && <tr><td colSpan={4} className="empty">{datos?.vista === vista ? 'No hay tareas para esta selección.' : 'Cargando tareas…'}</td></tr>}
+              {!filas.length && <tr><td colSpan={columnas} className="empty">{datos?.vista === vista ? 'No hay tareas para esta selección.' : 'Cargando tareas…'}</td></tr>}
             </tbody>
           </table>
         </div>
         <div className="timing-paginacion">
           <span>{ordenadas.length} {ordenadas.length === 1 ? 'tarea' : 'tareas'}</span>
+          {esCola && orden && <button type="button" className="btn ghost sm" onClick={() => { setOrden(undefined); setPagina(0); }}>Volver a la cola del día</button>}
           {paginas > 1 && <div className="timing-acciones">
             <button className="btn ghost sm" onClick={() => setPagina(paginaVisible - 1)} disabled={paginaVisible === 0}>Anterior</button>
             <span>{paginaVisible + 1} de {paginas}</span>

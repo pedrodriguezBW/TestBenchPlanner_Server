@@ -3,7 +3,9 @@ import type { PerfilTiming, Sesion } from '../../api/tipos';
 
 export const CAMARA_CLIMATICA = 'Cámara Climática';
 export type VistaTiming = 'solicitudes' | 'cola' | 'planificacion' | 'historico' | 'configuracion';
-export type AccionTiming = 'editar' | 'disponibilidad' | 'planificar' | 'iniciar' | 'avance' | 'cerrar' | 'reabrir' | 'cancelar' | 'duplicar';
+export type AccionTiming = 'editar' | 'disponibilidad' | 'estado' | 'planificar' | 'iniciar' | 'avance' | 'cerrar' | 'reabrir' | 'cancelar' | 'duplicar';
+export type ColumnaTiming = 'prioridad' | 'ordenDiario' | 'cuenta' | 'tecnico' | 'responsable' | 'estado';
+export type OrdenTiming = { columna: ColumnaTiming; descendente: boolean };
 
 export const VISTAS_TIMING: Record<VistaTiming, string> = {
   solicitudes: 'Mis solicitudes', cola: 'Mi cola', planificacion: 'Planificación', historico: 'Histórico', configuracion: 'Configuración',
@@ -106,4 +108,39 @@ export function ordenarCola(tareas: TareaTiming[], dia: string): TareaTiming[] {
     || (a.ordenDiario ?? Infinity) - (b.ordenDiario ?? Infinity)
     || (a.prioridad ?? Infinity) - (b.prioridad ?? Infinity)
     || a.id - b.id);
+}
+
+const compararTexto = new Intl.Collator('es', { numeric: true, sensitivity: 'base' });
+
+export const responsableTiming = (t: TareaTiming) => t.responsableNombre || t.responsableOrigen || t.responsable || '';
+export const tecnicoTiming = (t: TareaTiming) => t.tecnicoNombre || t.tecnicoOrigen || t.tecnico || '';
+
+export function ordenarTareas(tareas: TareaTiming[], { columna, descendente }: OrdenTiming): TareaTiming[] {
+  const valor = (t: TareaTiming) => {
+    if (columna === 'responsable') return responsableTiming(t);
+    if (columna === 'tecnico') return tecnicoTiming(t);
+    if (columna === 'estado') {
+      const estados = { pendiente: t.disponible ? 1 : 0, 'en-proceso': 2, cerrada: 3, cancelada: 4 };
+      return estados[t.estado];
+    }
+    return t[columna];
+  };
+  return [...tareas].sort((a, b) => {
+    const x = valor(a), y = valor(b);
+    if (x == null || x === '') return y == null || y === '' ? a.id - b.id : 1;
+    if (y == null || y === '') return -1;
+    const comparacion = typeof x === 'number' && typeof y === 'number' ? x - y : compararTexto.compare(String(x), String(y));
+    return comparacion * (descendente ? -1 : 1) || a.id - b.id;
+  });
+}
+
+export function sugerenciasTiming(tareas: TareaTiming[], opciones?: OpcionesTiming): Record<string, string[]> {
+  const unicos = (valores: (string | null | undefined)[]) => [...new Set(valores.filter((v): v is string => !!v?.trim()))].sort(compararTexto.compare);
+  return {
+    proyecto: unicos([...tareas.map((t) => t.proyecto), ...(opciones?.proyectos.map((p) => p.nombre) ?? [])]),
+    cuenta: unicos([...tareas.map((t) => t.cuenta), ...(opciones?.proyectos.map((p) => p.cuenta) ?? [])]),
+    responsable: unicos([...tareas.map(responsableTiming), ...(opciones?.personas.filter((p) => p.responsable).map((p) => p.nombre) ?? [])]),
+    tecnico: unicos([...tareas.map(tecnicoTiming), ...(opciones?.personas.filter((p) => p.tecnico).map((p) => p.nombre) ?? [])]),
+    banco: unicos([...tareas.map((t) => t.banco), ...(opciones?.equipos.filter((e) => e.clase === 'banco' && e.activo).map((e) => e.nombre) ?? [])]),
+  };
 }

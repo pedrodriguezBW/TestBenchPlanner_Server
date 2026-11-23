@@ -83,13 +83,12 @@ public class TimingPostgres {
             proyectos.addObject().put("id", rs.getLong(1)).put("nombre", rs.getString(2)).put("cuenta", rs.getString(3));
         });
         ArrayNode personas = opciones.putArray("personas");
-        bd.jdbc().query("SELECT u.email, u.titulo, bool_or(p.perfil = 'tecnico') AS tecnico, "
-                + "bool_or(p.perfil = 'solicitante') AS responsable FROM usuario u "
-                + "JOIN timing_perfil p ON u.email = p.email GROUP BY u.email, u.titulo ORDER BY u.titulo",
+        bd.jdbc().query("SELECT u.email, u.titulo, EXISTS (SELECT 1 FROM timing_perfil p "
+                + "WHERE p.email = u.email AND p.perfil = 'tecnico') AS tecnico FROM usuario u ORDER BY u.titulo",
                 (ResultSet rs) -> {
                     if (acceso.gestiona() || acceso.email().equals(rs.getString(1))) {
                         personas.addObject().put("email", rs.getString(1)).put("nombre", rs.getString(2))
-                                .put("tecnico", rs.getBoolean(3)).put("responsable", rs.getBoolean(4));
+                                .put("tecnico", rs.getBoolean(3)).put("responsable", true);
                     }
                 });
         ArrayNode equipos = opciones.putArray("equipos");
@@ -208,8 +207,9 @@ public class TimingPostgres {
                 case "editar" -> {
                     permiso(acceso.gestiona() || propietario);
                     regla(abierta, "La tarea está cerrada.");
+                    List<String> pendientes = faltantes(datos);
                     editarDatos(acceso, datos, cuerpo);
-                    if (datos.path("disponible").asBoolean()) {
+                    if (datos.path("disponible").asBoolean() && !pendientes.containsAll(faltantes(datos))) {
                         exigirCompleta(datos);
                     }
                 }
@@ -219,10 +219,7 @@ public class TimingPostgres {
                     regla(cuerpo.path("disponible").isBoolean(), "Indica la disponibilidad.");
                     boolean disponible = cuerpo.path("disponible").asBoolean();
                     if (disponible) {
-                        validarProyectoDisponible(datos);
-                        exigirCompleta(datos);
-                        regla(perfiles(texto(datos, "responsable")).contains("solicitante"),
-                                "Selecciona un responsable habilitado antes de marcar como disponible.");
+                        comprobarDisponibilidad(datos);
                     }
                     datos.put("disponible", disponible);
                     evento.put("disponible", disponible);
@@ -231,6 +228,18 @@ public class TimingPostgres {
                     permiso(acceso.coordina());
                     regla(abierta, "La tarea está cerrada.");
                     planificar(datos, cuerpo, evento);
+                }
+                case "estado" -> {
+                    permiso(acceso.gestiona());
+                    regla(abierta, "Usa la acción de reapertura para cambiar una tarea cerrada.");
+                    String nuevo = texto(cuerpo, "estado");
+                    regla(List.of("pendiente", "en-proceso").contains(nuevo), "Selecciona un estado de trabajo válido.");
+                    boolean disponible = "en-proceso".equals(nuevo) || cuerpo.path("disponible").asBoolean(datos.path("disponible").asBoolean());
+                    if (disponible && !datos.path("disponible").asBoolean()) {
+                        comprobarDisponibilidad(datos);
+                    }
+                    datos.put("estado", nuevo).put("disponible", disponible);
+                    evento.put("anterior", estado).put("estado", nuevo).put("disponible", disponible);
                 }
                 case "iniciar" -> {
                     permiso(asignado);
@@ -243,7 +252,7 @@ public class TimingPostgres {
                     registrarAvance(acceso, id, datos, cuerpo, evento);
                 }
                 case "cerrar" -> {
-                    permiso(asignado);
+                    permiso(asignado || acceso.gestiona());
                     exigirEnCurso(datos);
                     cerrar(id, datos, cuerpo, evento);
                 }
@@ -285,8 +294,8 @@ public class TimingPostgres {
         CAMPOS_TEXTO.forEach(campo -> copiarTexto(datos, cuerpo, campo));
         if (cuerpo.has("responsable") && acceso.gestiona()) {
             String responsable = texto(cuerpo, "responsable");
-            if (!responsable.equals(texto(datos, "responsable")) && !responsable.isEmpty()) {
-                regla(perfiles(responsable).contains("solicitante"), "Selecciona un solicitante habilitado.");
+            if (!responsable.equals(texto(datos, "responsable"))) {
+                regla(responsable.isEmpty() || existeUsuario(responsable), "Selecciona un usuario de TestBenchPlanner.");
                 datos.remove("responsableOrigen");
             }
             datos.put("responsable", responsable);
@@ -327,6 +336,17 @@ public class TimingPostgres {
         if (cuerpo.has("fechaEnsayo")) {
             datos.put("fechaEnsayo", fechaOpcional(cuerpo, "fechaEnsayo"));
         }
+    }
+
+    private boolean existeUsuario(String email) {
+        return Boolean.TRUE.equals(bd.jdbc().queryForObject("SELECT EXISTS (SELECT 1 FROM usuario WHERE email = ?)",
+                Boolean.class, email));
+    }
+
+    private void comprobarDisponibilidad(ObjectNode datos) {
+        validarProyectoDisponible(datos);
+        exigirCompleta(datos);
+        regla(existeUsuario(texto(datos, "responsable")), "Selecciona un responsable de TestBenchPlanner.");
     }
 
     private void elegirProyecto(ObjectNode datos, long id) {
