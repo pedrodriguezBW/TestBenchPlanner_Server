@@ -1,0 +1,36 @@
+# Datos leídos de SharePoint SIN anonimizar: nunca se versionan.
+datos/privado/
+# Perfil de Edge con las cookies de la sesión corporativa.
+.edge_profile/
+**/.edge_profile/
+# Dependencias y compilados
+node_modules/
+target/
+dist/
+*.log
+
+# Configuración local con URLs del sitio (no se versiona)
+backend/config/
+
+# Pruebas unitarias de la interfaz (compiladas)
+frontend/target-test/
+
+# Logs del modo servidor (hito S4)
+backend/logs/
+
+resultado_mvn*.txt
+/LEEME*.txt
+*.zip
+*.p12
+*.pfx
+*.key
+*.dump
+*.backup
+.env
+.env.*
+!.env.example
+/herramientas/laboratorio/--url/
+/datos/escenarios/sharepoint-2026-11-05/
+/datos/escenarios/**/sharepoint-2026-11-05/
+/herramientas/laboratorio/resultados-interfaz/
+/.vscode/settings.json

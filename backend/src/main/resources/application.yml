@@ -1,0 +1,106 @@
+# Configuración por defecto de TestBenchPlanner.
+# Cualquier valor se puede cambiar al arrancar: --planner.almacen=sharepoint, etc.
+server:
+  port: 5001
+  address: 127.0.0.1          # solo accesible desde este PC, como la 4.9.4
+
+planner:
+  almacen: local              # local | sharepoint | postgresql
+  fecha-fija: ""              # aaaa-mm-dd para reproducir un día concreto
+  carpeta-usuario: ${user.home}/.testbenchplanner
+
+  listas:
+    # D11: no se guarda una lista compartida (bancos, proyectos, usuarios,
+    # recursos) si su lectura falló o llegó vacía, ni se deja vacía.
+    # true solo para una instalación nueva con las listas vacías.
+    permitir-vacias: false
+
+  local:
+    carpeta-datos: ${planner.carpeta-usuario}/datos-locales
+    escenario-inicial: ../datos/escenarios/sharepoint-2026-11-05
+    reiniciar-al-arrancar: false
+    usuario-email: laboratorio@ejemplo.local
+    usuario-nombre: Laboratorio
+
+  sharepoint:
+    # La URL del sitio NO se guarda en el repositorio: indícala en
+    # config/application-sharepoint.yml junto al ejecutable o con --planner.sharepoint.sitio=…
+    sitio: ""
+    sitio-aprobaciones: ""
+    lista-aprobaciones: "Services approvals database V2"
+    escritura-habilitada: false   # ¡por defecto NO se escribe nada en SharePoint!
+    publicar-version: false       # solo al distribuir la versión al equipo
+    puerto-depuracion: 9222
+    carpeta-perfil-edge: ${planner.carpeta-usuario}/.edge_profile
+    espejo-habilitado: true
+    # Conexiones de SOLO LECTURA con Edge en paralelo a la principal (que hace
+    # todas las escrituras). Así las consultas (estados de aprobación, recursos…)
+    # no esperan detrás de la carga de la planificación ni de los guardados.
+    # 0 = todo por una sola conexión, como en versiones anteriores.
+    carriles-lectura: 2
+
+  # Base de datos PostgreSQL (planner.almacen=postgresql). Ver docs/10-servidor-postgresql.md.
+  # Las CLAVES no se guardan en el repositorio: config/application.yml junto al
+  # ejecutable o variables de entorno (PLANNER_POSTGRESQL_CLAVEAPP, …).
+  postgresql:
+    url: jdbc:postgresql://127.0.0.1:5432/tbp
+    esquema: tbp
+    usuario-app: tbp_app            # día a día: lee y escribe datos, sin DDL
+    clave-app: ""
+    usuario-propietario: tbp_owner  # solo Flyway al arrancar (crea/cambia la estructura)
+    clave-propietario: ""
+    # true: al arrancar se aplican las migraciones pendientes (con tbp_owner) y se
+    # valida la estructura. false: solo se valida (con tbp_app); si falta alguna
+    # migración o no cuadra, la aplicación NO arranca.
+    migrar-al-arrancar: true
+    conexiones-maximas: 10
+    # Quién edita FUERA del modo servidor (una persona por instalación). En el
+    # modo servidor (hito S3) cada persona entra con su cuenta y esto no se usa.
+    usuario-email: ${planner.local.usuario-email}
+    usuario-nombre: ${planner.local.usuario-nombre}
+    # Solo pruebas y laboratorio: /api/v1/local/reinicio vacía la base y carga un escenario.
+    reinicio-pruebas: false
+
+  # Modo servidor (hito S2): se activa con el perfil «servidor» (application-servidor.yml).
+  servidor:
+    activo: false
+
+  # Inicio de sesión del modo servidor (hito S3, docs/12-inicio-de-sesion.md).
+  # Fuera del modo servidor no se usa: cada PC sigue identificando a su usuario.
+  autenticacion:
+    intentos-maximos: 5         # intentos fallidos seguidos antes del bloqueo temporal
+    bloqueo: 15m                # duración del bloqueo (un Admin puede desbloquear antes)
+    inactividad: 30m            # sin clics ni teclas este tiempo, la sesión se cierra
+    longitud-minima-clave: 10
+
+  # Migración de datos en dos pasos (docs/10-servidor-postgresql.md, apartado 5).
+  #   exportar: carpeta destino; se lee el almacén configurado (SharePoint) en SOLO LECTURA.
+  #   importar: carpeta de una exportación; se carga en PostgreSQL (repetible, sin duplicar).
+  migracion:
+    exportar: ""
+    importar: ""
+    simular: false            # importar: calcula y verifica los cambios y deshace todo
+    salir-al-terminar: true   # exportar/importar y cerrar (sin servidor web)
+    max-actividad: 5000       # filas del registro de actividad que se exportan
+    # Fusión de tres vías (importar-en-postgresql.cmd BASE SHAREPOINT …): conserva lo hecho
+    # en PostgreSQL y añade lo hecho en SharePoint desde la exportación «base».
+    base: ""                  # exportación con la que se cargó la base (estado común)
+    resoluciones: ""          # conflictos.json editado (opcional)
+    salida: ""                # carpeta de trabajo (vacío = junto a la de SharePoint, con fecha)
+
+spring:
+  # La base de datos y Flyway se configuran a mano solo con planner.almacen=postgresql
+  # (dos usuarios: tbp_owner para Flyway y tbp_app para el día a día).
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration
+      # Sin usuario «user» con contraseña generada: las cuentas son las de la aplicación (hito S3).
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  mvc:
+    # Una petición abandonada por el navegador (recarga) no es un error que avisar.
+    log-resolved-exception: false
+
+logging:
+  level:
+    root: INFO

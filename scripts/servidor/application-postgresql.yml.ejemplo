@@ -1,0 +1,16 @@
+# Copiar como backend/config/application-postgresql.yml (esa carpeta NO se versiona)
+# y rellenar las claves creadas con crear-base-de-datos.cmd.
+planner:
+  almacen: postgresql
+  postgresql:
+    url: jdbc:postgresql://127.0.0.1:5432/tbp
+    esquema: tbp
+    usuario-app: tbp_app
+    clave-app: "CLAVE_DE_TBP_APP"
+    usuario-propietario: tbp_owner
+    clave-propietario: "CLAVE_DE_TBP_OWNER"
+    migrar-al-arrancar: true
+    # Quién edita FUERA del modo servidor (pruebas en un PC). En el modo servidor
+    # cada persona entra con su cuenta (hito S3) y esto no se usa.
+    usuario-email: "nombre.apellido@borgwarner.com"
+    usuario-nombre: "Nombre Apellido"

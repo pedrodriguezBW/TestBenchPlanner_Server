@@ -1,0 +1,139 @@
+package com.borgwarner.tbp.aplicacion;
+
+import com.borgwarner.tbp.aplicacion.puertos.AlmacenCatalogos;
+import com.borgwarner.tbp.dominio.planificacion.Areas;
+import com.borgwarner.tbp.aplicacion.puertos.AlmacenRecursos;
+import com.borgwarner.tbp.aplicacion.puertos.AlmacenUsuarios;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+/**
+ * Lectura y guardado de las listas compartidas (catálogos, usuarios y
+ * recursos) con las protecciones de D11: leer antes de escribir
+ * (RegistroLecturas) y no vaciar ni reescribir sobre una lectura vacía
+ * (ProteccionListas, aplicada por cada almacén antes de escribir nada).
+ */
+@Service
+public class ServicioListas {
+
+    private final AlmacenCatalogos catalogos;
+    private final AlmacenUsuarios usuarios;
+    private final AlmacenRecursos recursos;
+    private final RegistroLecturas lecturas;
+
+    public ServicioListas(AlmacenCatalogos catalogos, AlmacenUsuarios usuarios, AlmacenRecursos recursos,
+                          RegistroLecturas lecturas) {
+        this.catalogos = catalogos;
+        this.usuarios = usuarios;
+        this.recursos = recursos;
+        this.lecturas = lecturas;
+    }
+
+    public ObjectNode leerCatalogos() {
+        try {
+            ObjectNode leido = catalogos.leer();
+            lecturas.anotar(RegistroLecturas.BANCOS, !leido.has("benches_error"), leido.path("benches").size());
+            lecturas.anotar(RegistroLecturas.PROYECTOS, !leido.has("projects_error"), leido.path("projects").size());
+            lecturas.anotar(RegistroLecturas.RESPONSABLES, !leido.has("responsibles_error"), leido.path("responsibles").size());
+            return leido;
+        } catch (PeticionCancelada cancelada) {
+            throw cancelada; // la pestaña se ha cerrado: no cuenta como lectura fallida (D11)
+        } catch (RuntimeException e) {
+            lecturas.anotar(RegistroLecturas.BANCOS, false, 0);
+            lecturas.anotar(RegistroLecturas.PROYECTOS, false, 0);
+            lecturas.anotar(RegistroLecturas.RESPONSABLES, false, 0);
+            throw e;
+        }
+    }
+
+    public ObjectNode guardarCatalogos(JsonNode entrada) {
+        normalizarAreas(entrada, areas());
+        lecturas.exigir(RegistroLecturas.BANCOS);
+        lecturas.exigir(RegistroLecturas.PROYECTOS);
+        if (entrada.path("responsibles").size() > 0) {
+            lecturas.exigir(RegistroLecturas.RESPONSABLES); // solo se toca si llega una lista no vacía
+        }
+        return catalogos.guardar(entrada);
+    }
+
+    /** La lectura de usuarios la anota ServicioSesion al identificar (whoami). */
+    public ObjectNode guardarUsuarios(JsonNode entrada) {
+        lecturas.exigir(RegistroLecturas.USUARIOS);
+        return usuarios.guardar(entrada);
+    }
+
+    public ObjectNode leerRecursos() {
+        try {
+            ObjectNode leido = recursos.leer();
+            lecturas.anotar(RegistroLecturas.RECURSOS, !leido.has("resources_error") && !leido.has("error"),
+                    leido.path("resources").size());
+            return leido;
+        } catch (PeticionCancelada cancelada) {
+            throw cancelada; // la pestaña se ha cerrado: no cuenta como lectura fallida (D11)
+        } catch (RuntimeException e) {
+            lecturas.anotar(RegistroLecturas.RECURSOS, false, 0);
+            throw e;
+        }
+    }
+
+    public ObjectNode guardarRecursos(JsonNode entrada) {
+        lecturas.exigir(RegistroLecturas.RECURSOS);
+        return recursos.guardarCatalogo(entrada);
+    }
+
+    public boolean permitirVacias() {
+        return lecturas.permitirVacias();
+    }
+
+    /**
+     * Áreas que existen: con PostgreSQL, las del catálogo (pueden haberse creado
+     * desde la aplicación, D56); con SharePoint y en local, las tres de serie
+     * (así no se lee la lista otra vez antes de guardar).
+     */
+    public List<Areas.Definicion> areas() {
+        return catalogos.areasEditables() ? ServicioPlanificacion.definicionesAreas(catalogos.leer()) : Areas.DE_SERIE;
+    }
+
+    /**
+     * Áreas de los bancos que llegan con «area»: el área es de la categoría
+     * (manda la de su primer banco; un área que no existe cuenta como Bancos
+     * Térmicos) y los bancos de un área con organización fija (HVCH: CTAG o STC)
+     * la llevan. Un banco que pasa a un área que se divide banco a banco con una
+     * organización que no existe ahí pasa a BW. Los bancos sin «area» (interfaz
+     * clásica) no se tocan: el almacén conserva la que tenían.
+     */
+    static void normalizarAreas(JsonNode entrada, List<Areas.Definicion> areas) {
+        List<String> codigos = Areas.codigos(areas);
+        JsonNode bancos = entrada == null ? null : entrada.path("benches");
+        if (bancos == null || !bancos.isArray()) {
+            return;
+        }
+        java.util.Map<String, String> areaPorGrupo = new java.util.HashMap<>();
+        for (JsonNode b : bancos) {
+            if (b.has("area") && !b.path("area").asText("").trim().isEmpty()) {
+                areaPorGrupo.putIfAbsent(claveGrupo(b), Areas.normalizar(b.path("area").asText(""), codigos));
+            }
+        }
+        for (JsonNode b : bancos) {
+            if (!(b instanceof ObjectNode o) || !o.has("area")) {
+                continue;
+            }
+            String area = areaPorGrupo.getOrDefault(claveGrupo(o), Areas.TERMICOS);
+            o.put("area", area);
+            String fija = Areas.organizacionFija(area, areas);
+            if (fija != null) {
+                o.put("org", fija);
+            } else if (!"CTAG".equals(o.path("org").asText(""))) {
+                o.put("org", "BW");
+            }
+        }
+    }
+
+    private static String claveGrupo(JsonNode banco) {
+        String clave = banco.path("groupKey").asText("");
+        return clave.isEmpty() ? "nombre:" + banco.path("groupName").asText("") : clave;
+    }
+}

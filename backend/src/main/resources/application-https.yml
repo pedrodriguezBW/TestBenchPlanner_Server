@@ -1,0 +1,23 @@
+# =============================================================================
+# Perfil «https» (hito S4): el servidor atiende SOLO por HTTPS en su puerto.
+#
+# Lo activa el servicio de Windows (scripts\servidor\instalar-servicio.cmd):
+#   --spring.profiles.active=postgresql,servidor,https
+# El certificado (autofirmado, generado en el propio servidor por el instalador)
+# y su clave están en la carpeta config de la instalación, que no se versiona:
+#   config\tbp-certificado.p12    certificado + clave privada (PKCS12)
+#   config\application-https.yml  key-store-password (la escribe el instalador)
+# Para usar un certificado de la CA interna basta con sustituir esos dos
+# valores (ver docs/13-despliegue-servidor.md, apartado HTTPS).
+# =============================================================================
+server:
+  ssl:
+    enabled: true
+    key-store: file:config/tbp-certificado.p12
+    key-store-type: PKCS12
+    key-store-password: ""     # vacío a propósito: sin la clave local no arranca
+    enabled-protocols: TLSv1.2,TLSv1.3
+  servlet:
+    session:
+      cookie:
+        secure: true           # la cookie de sesión solo viaja cifrada

@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.5</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.borgwarner.tbp</groupId>
+    <artifactId>testbenchplanner-backend</artifactId>
+    <version>5.0.0-SNAPSHOT</version>
+    <name>TestBenchPlanner · backend</name>
+    <description>Backend Java de TestBenchPlanner (migración de la 4.9.4)</description>
+
+    <properties>
+        <java.version>17</java.version>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <playwright.version>1.48.0</playwright.version>
+        <!-- Carpeta del laboratorio de paridad (casos, referencias y escenarios) -->
+        <laboratorio.dir>${project.basedir}/../herramientas/laboratorio</laboratorio.dir>
+        <escenarios.dir>${project.basedir}/../datos/escenarios</escenarios.dir>
+        <!-- Vacío = PostgreSQL temporal de las pruebas; con URL = un PostgreSQL ya instalado (superusuario). -->
+        <tbp.pruebas.postgresql.url></tbp.pruebas.postgresql.url>
+        <tbp.pruebas.postgresql.usuario>postgres</tbp.pruebas.postgresql.usuario>
+        <tbp.pruebas.postgresql.clave></tbp.pruebas.postgresql.clave>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <!-- Solo para el adaptador de SharePoint: conexión con el Edge del usuario por CDP -->
+        <dependency>
+            <groupId>com.microsoft.playwright</groupId>
+            <artifactId>playwright</artifactId>
+            <version>${playwright.version}</version>
+        </dependency>
+
+        <!--
+          Almacén PostgreSQL (planner.almacen=postgresql, hito S1): JDBC sin JPA y
+          estructura SIEMPRE por migraciones Flyway (src/main/resources/db/migration).
+          Las versiones las fija Spring Boot 3.3.5.
+        -->
+        <dependency>
+            <!-- Inicio de sesión del modo servidor (hito S3): formulario, sesión y BCrypt -->
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+          PostgreSQL real para las pruebas sin instalar nada ni usar Docker: descarga
+          una vez (de Maven Central) unos binarios reducidos de PostgreSQL y arranca
+          un servidor temporal en un puerto libre. Para usar un PostgreSQL ya
+          instalado: -Dtbp.pruebas.postgresql.url=jdbc:postgresql://127.0.0.1:5432/postgres
+          (ver docs/10-servidor-postgresql.md).
+        -->
+        <dependency>
+            <groupId>io.zonky.test</groupId>
+            <artifactId>embedded-postgres</artifactId>
+            <version>2.1.0</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>testbenchplanner</finalName>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- La interfaz 4.9.4 original se empaqueta tal cual para servirla en /clasico -->
+            <resource>
+                <directory>${project.basedir}/../legacy</directory>
+                <includes>
+                    <include>BW_TestBench_Planner_31_Local.html</include>
+                </includes>
+                <targetPath>clasico</targetPath>
+            </resource>
+            <!-- Interfaz React compilada (frontend/dist), si existe: se sirve en «/» -->
+            <resource>
+                <directory>${project.basedir}/../frontend/dist</directory>
+                <targetPath>static</targetPath>
+            </resource>
+        </resources>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- Las fechas de la 4.9.4 son locales de Madrid: las pruebas también. -->
+                    <argLine>-Duser.timezone=Europe/Madrid -Dfile.encoding=UTF-8</argLine>
+                    <systemPropertyVariables>
+                        <tbp.pruebas.postgresql.url>${tbp.pruebas.postgresql.url}</tbp.pruebas.postgresql.url>
+                        <tbp.pruebas.postgresql.usuario>${tbp.pruebas.postgresql.usuario}</tbp.pruebas.postgresql.usuario>
+                        <tbp.pruebas.postgresql.clave>${tbp.pruebas.postgresql.clave}</tbp.pruebas.postgresql.clave>
+                        <laboratorio.dir>${laboratorio.dir}</laboratorio.dir>
+                        <escenarios.dir>${escenarios.dir}</escenarios.dir>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+    <!--
+      Recompilar la interfaz React desde Maven SIN instalar Node en el PC:
+        mvnw.cmd -Pinterfaz clean verify
+      Descarga un Node portátil dentro de backend/target (necesita acceso a
+      nodejs.org y al registro de npm). Sin -Pinterfaz se usa frontend/dist tal
+      cual viene en el zip, que es lo normal.
+    -->
+    <profiles>
+        <profile>
+            <id>interfaz</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>com.github.eirslett</groupId>
+                        <artifactId>frontend-maven-plugin</artifactId>
+                        <version>1.15.1</version>
+                        <configuration>
+                            <workingDirectory>${project.basedir}/../frontend</workingDirectory>
+                            <installDirectory>${project.build.directory}/node</installDirectory>
+                            <nodeVersion>v22.12.0</nodeVersion>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>node-portatil</id>
+                                <phase>generate-resources</phase>
+                                <goals><goal>install-node-and-npm</goal></goals>
+                            </execution>
+                            <execution>
+                                <id>dependencias-interfaz</id>
+                                <phase>generate-resources</phase>
+                                <goals><goal>npm</goal></goals>
+                                <configuration><arguments>install</arguments></configuration>
+                            </execution>
+                            <execution>
+                                <id>compilar-interfaz</id>
+                                <phase>generate-resources</phase>
+                                <goals><goal>npm</goal></goals>
+                                <configuration><arguments>run build</arguments></configuration>
+                            </execution>
+                            <execution>
+                                <!-- Pruebas de la interfaz (altas y copias al momento, cola de operaciones) -->
+                                <id>pruebas-interfaz</id>
+                                <phase>test</phase>
+                                <goals><goal>npm</goal></goals>
+                                <configuration><arguments>test</arguments></configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

@@ -1,0 +1,200 @@
+package com.borgwarner.tbp.aplicacion;
+
+import com.borgwarner.tbp.aplicacion.puertos.AlmacenCalendario;
+import com.borgwarner.tbp.aplicacion.puertos.AlmacenCatalogos;
+import com.borgwarner.tbp.aplicacion.puertos.AlmacenEnsayos;
+import com.borgwarner.tbp.aplicacion.puertos.ConflictoEdicion;
+import com.borgwarner.tbp.aplicacion.puertos.Reloj;
+import com.borgwarner.tbp.dominio.calendario.Calendario;
+import com.borgwarner.tbp.dominio.planificacion.Areas;
+import com.borgwarner.tbp.dominio.planificacion.BancoConfigurado;
+import com.borgwarner.tbp.dominio.planificacion.CambioFila;
+import com.borgwarner.tbp.dominio.planificacion.ConfiguracionBancos;
+import com.borgwarner.tbp.dominio.planificacion.ContextoPlan;
+import com.borgwarner.tbp.dominio.planificacion.FilaGuardada;
+import com.borgwarner.tbp.dominio.planificacion.Planificacion;
+import com.borgwarner.tbp.dominio.planificacion.ResultadoPlan;
+import com.borgwarner.tbp.dominio.usuarios.Usuario;
+import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Casos de uso de la planificación: leer el estado y ejecutar operaciones con
+ * control de concurrencia.
+ *
+ * Cada operación se aplica sobre una lectura RECIENTE del almacén. Antes de
+ * guardar se comprueba que las filas que se van a escribir siguen como las vio
+ * el usuario (versiones); si otra persona las ha cambiado, se lanza
+ * ConflictoEdicion y no se escribe nada. Con «forzar» se omite la comprobación
+ * de lo que vio el usuario (opción «Guardar la mía encima»), pero el almacén
+ * sigue protegiendo contra cambios ocurridos durante la propia escritura.
+ *
+ * Las operaciones de este PC se ejecutan de una en una (la interfaz ya enseña
+ * el alta o la copia antes de que termine de guardarse, así que el usuario
+ * puede encadenar varias): dos operaciones propias nunca se pisan entre sí.
+ * La lectura de cada operación es autoritativa y, al terminar, la respuesta
+ * lleva la vista calculada sin volver a leer SharePoint.
+ */
+@Service
+public class ServicioPlanificacion {
+
+    /** Una operación del dominio sobre el estado leído. */
+    @FunctionalInterface
+    public interface Operacion<T> {
+        T aplicar(Planificacion planificacion, ResultadoPlan plan);
+    }
+
+    /** Resultado: lo que devuelve la operación, los cambios guardados y la vista nueva. */
+    public record Resultado<T>(T valor, List<CambioFila> cambios, Vista vista) {
+    }
+
+    private final AlmacenEnsayos ensayos;
+    private final AlmacenCatalogos catalogos;
+    private final AlmacenCalendario calendarios;
+    private final Reloj reloj;
+    private final ServicioSesion sesion;
+    private final Object operaciones = new Object();
+
+    public ServicioPlanificacion(AlmacenEnsayos ensayos, AlmacenCatalogos catalogos, AlmacenCalendario calendarios,
+                                 Reloj reloj, ServicioSesion sesion) {
+        this.ensayos = ensayos;
+        this.catalogos = catalogos;
+        this.calendarios = calendarios;
+        this.reloj = reloj;
+        this.sesion = sesion;
+    }
+
+    /** Lee catálogos y ensayos a la vez y calcula el plan (sin el hueco de 20 s de la 4.9.4, D17). */
+    public Vista vista() {
+        ConfiguracionBancos configuracion = configuracion();
+        List<FilaGuardada> filas = ensayos.leer();
+        Planificacion planificacion = Planificacion.desdeFilas(filas, configuracion);
+        ContextoPlan contexto = contexto();
+        return new Vista(planificacion, ResultadoPlan.calcular(planificacion, contexto), contexto);
+    }
+
+    public ContextoPlan contexto() {
+        Calendario calendario = calendarios.leer(reloj.hoy());
+        return new ContextoPlan(reloj.hoy(), calendario);
+    }
+
+    public ConfiguracionBancos configuracion() {
+        JsonNode catalogo = catalogos.leer();
+        return configuracionDe(catalogo.path("benches"), definicionesAreas(catalogo));
+    }
+
+    /**
+     * Áreas del catálogo con su nombre: las de «areas» ([{code, organization}],
+     * solo con PostgreSQL y si se han gestionado desde la aplicación, D56) o,
+     * si no viene, las tres de serie; los nombres, los de «areaNames».
+     */
+    public static List<Areas.Definicion> definicionesAreas(JsonNode catalogo) {
+        List<Areas.Definicion> guardadas = new ArrayList<>();
+        for (JsonNode a : catalogo.path("areas")) {
+            String codigo = a.path("code").asText("").trim();
+            JsonNode org = a.get("organization");
+            String fija = org == null || org.isNull() || org.asText("").trim().isEmpty() ? null : org.asText().trim();
+            if (!codigo.isEmpty()) {
+                guardadas.add(new Areas.Definicion(codigo, null, fija));
+            }
+        }
+        return Areas.definiciones(guardadas, nombresAreas(catalogo));
+    }
+
+    /** Nombres de área guardados (areaNames del catálogo: código → nombre). */
+    public static java.util.Map<String, String> nombresAreas(JsonNode catalogo) {
+        java.util.Map<String, String> nombres = new java.util.LinkedHashMap<>();
+        catalogo.path("areaNames").fields().forEachRemaining(e -> nombres.put(e.getKey(), e.getValue().asText("")));
+        return nombres;
+    }
+
+    /** Configuración de bancos a partir de la lista compartida (filas de TestBenchBenches). */
+    public static ConfiguracionBancos configuracionDe(JsonNode lista) {
+        return configuracionDe(lista, java.util.Map.of());
+    }
+
+    /** Ídem, con los nombres de área guardados (áreas de serie). */
+    public static ConfiguracionBancos configuracionDe(JsonNode lista, java.util.Map<String, String> nombresAreas) {
+        return configuracionDe(lista, Areas.definiciones(null, nombresAreas));
+    }
+
+    /** Ídem, con las áreas que existen (ver {@link #definicionesAreas}). */
+    public static ConfiguracionBancos configuracionDe(JsonNode lista, List<Areas.Definicion> areas) {
+        List<BancoConfigurado> bancos = new ArrayList<>();
+        for (JsonNode b : lista) {
+            JsonNode seq = b.get("seq");
+            bancos.add(new BancoConfigurado(b.path("name").asText(""), texto(b, "groupKey"), texto(b, "groupName"),
+                    texto(b, "dot"), texto(b, "org"), seq == null || seq.isNull() ? null : seq.asDouble(), texto(b, "area")));
+        }
+        return ConfiguracionBancos.desdeLista(bancos, areas);
+    }
+
+    /** Quién firma en el registro de actividad: nombre visible, responsable o correo. */
+    public static AlmacenEnsayos.Actor actor(Usuario usuario) {
+        String nombre = usuario.displayName();
+        if (nombre == null || nombre.isEmpty()) {
+            nombre = usuario.responsibleName();
+        }
+        if (nombre == null || nombre.isEmpty()) {
+            nombre = usuario.email();
+        }
+        return new AlmacenEnsayos.Actor(usuario.email(), nombre);
+    }
+
+    private static String texto(JsonNode nodo, String campo) {
+        JsonNode valor = nodo.get(campo);
+        return valor == null || valor.isNull() ? null : valor.asText();
+    }
+
+    /** Versión (huella) de cada fila de la vista, para que la interfaz la devuelva al operar. */
+    public static Map<String, String> versiones(Vista vista) {
+        Map<String, String> versiones = new HashMap<>();
+        for (String banco : vista.planificacion().bancos()) {
+            vista.planificacion().ensayos(banco).forEach(e -> versiones.put(e.id(), Versiones.de(vista.planificacion().textoLeido(e.id()))));
+        }
+        return versiones;
+    }
+
+    /**
+     * Ejecuta una operación y guarda lo que cambie.
+     *
+     * @param versionesVistas uid -> versión que tenía el usuario en pantalla
+     * @param forzar          true = «Guardar la mía encima»
+     */
+    public <T> Resultado<T> ejecutar(Usuario usuario, Map<String, String> versionesVistas, boolean forzar, Operacion<T> operacion) {
+        sesion.exigirEscritura(usuario);
+        synchronized (operaciones) {
+            // Una operación enviada termina aunque se cierre la pestaña que la pidió.
+            return Cancelacion.sinCancelar(() -> ejecutarAhora(usuario, versionesVistas, forzar, operacion));
+        }
+    }
+
+    private <T> Resultado<T> ejecutarAhora(Usuario usuario, Map<String, String> versionesVistas, boolean forzar, Operacion<T> operacion) {
+        Vista vista = vista();
+        T valor = operacion.aplicar(vista.planificacion(), vista.plan());
+        List<CambioFila> cambios = vista.planificacion().cambiosPendientes();
+        if (!forzar && versionesVistas != null) {
+            List<ConflictoEdicion.FilaEnConflicto> conflictos = new ArrayList<>();
+            for (CambioFila cambio : cambios) {
+                String vistaUsuario = versionesVistas.get(cambio.uid());
+                if (vistaUsuario != null && cambio.textoAnterior() != null && !vistaUsuario.equals(Versiones.de(cambio.textoAnterior()))) {
+                    conflictos.add(new ConflictoEdicion.FilaEnConflicto(cambio.uid(), cambio.textoAnterior()));
+                }
+            }
+            if (!conflictos.isEmpty()) {
+                throw new ConflictoEdicion(conflictos);
+            }
+        }
+        if (!cambios.isEmpty()) {
+            ensayos.guardar(cambios, true, actor(usuario));
+            vista.planificacion().confirmarGuardado(cambios);
+        }
+        Vista nueva = new Vista(vista.planificacion(), ResultadoPlan.calcular(vista.planificacion(), vista.contexto()), vista.contexto());
+        return new Resultado<>(valor, cambios, nueva);
+    }
+}

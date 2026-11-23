@@ -1,0 +1,51 @@
+# =============================================================================
+# Perfil «servidor» (hito S2): TestBenchPlanner en el PC servidor, una sola
+# instancia a la que se entra desde el navegador de otros PCs de la red.
+#
+#   - Escucha en todas las interfaces de red (no solo en 127.0.0.1).
+#   - Solo con PostgreSQL: si planner.almacen no es postgresql, no arranca.
+#   - No se apaga al cerrar pestañas, no ofrece /clasico ni la API antigua.
+#   - Cada persona entra con su email y su contraseña de la aplicación (hito S3).
+#
+# Se arranca junto al perfil postgresql (claves de la base en
+# config/application-postgresql.yml):  --spring.profiles.active=postgresql,servidor
+# Instalado como servicio de Windows (hito S4) se añade el perfil https
+# (application-https.yml) y el log va a logs/ (docs/13-despliegue-servidor.md).
+# Dirección y puerto se cambian en config/application-servidor.yml (no se versiona).
+# Ver docs/11-modo-servidor.md.
+# =============================================================================
+server:
+  address: 0.0.0.0
+  port: 5001
+  # Al parar (servicio o Ctrl+C) se terminan las peticiones en curso antes de cerrar.
+  shutdown: graceful
+  servlet:
+    session:
+      # La inactividad real la vigila la aplicación (los sondeos automáticos no cuentan);
+      # esto solo libera la sesión de una pestaña cerrada.
+      timeout: ${planner.autenticacion.inactividad}
+      cookie:
+        name: TBP_SESION
+        http-only: true
+        same-site: lax
+
+planner:
+  almacen: postgresql
+  servidor:
+    activo: true
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 20s
+
+# Log a fichero con rotación (hito S4): logs/testbenchplanner.log junto a la
+# carpeta de trabajo (en el servicio, C:\TestBenchPlanner\logs). Cada día o
+# cada 10 MB se comprime el anterior; se guardan 30 días y como mucho 1 GB.
+logging:
+  file:
+    name: logs/testbenchplanner.log
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 30
+      total-size-cap: 1GB

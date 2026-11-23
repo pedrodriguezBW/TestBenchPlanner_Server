@@ -1,0 +1,94 @@
+/* Estilos propios de la interfaz React (lo que en la 4.9.4 se generaba con estilos en línea). */
+.tbp-sin-marco { border: 0; padding: 0; margin: 0; min-width: 0; }
+.tbp-avisos { position: fixed; right: 22px; bottom: 22px; z-index: 500; display: flex; flex-direction: column; gap: 8px; }
+.tbp-aviso { background: var(--panel); border: 1px solid var(--turq); border-radius: 10px; padding: 10px 14px; font-size: 13px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .5); max-width: 380px; }
+.tbp-aviso.error { border-color: var(--danger); color: #ffe3e3; }
+.tbp-cierre { display: grid; grid-template-columns: 150px 1fr; gap: 8px 12px; align-items: center; margin-top: 10px; }
+.tbp-cierre label { color: var(--muted); font-size: 13px; }
+.tbp-conflicto { margin: 8px 0; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.cal-foot { display: flex; justify-content: space-between; margin-top: 6px; }
+.modal-bg.show { display: flex; }
+
+/* Tiradores: también con el dedo (la 4.9.4 atendía touchstart/touchmove). */
+.card-rz, .bs-divider, .colrz, .g-lwgrip { touch-action: none; }
+
+/* Alta o copia que ya se ve mientras se guarda en SharePoint (se confirma sola). */
+tr.guardando-fila > td { opacity: .6; }
+
+/* Áreas de bancos (Thermal Benches, HVCH - CTAG, HVCH - STC) */
+.g-area{display:flex;align-items:center;border-top:2px solid var(--turq);height:22px;background:var(--panel)}
+.g-area .g-label{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--turq);padding:0 8px;height:22px;display:flex;align-items:center;background:var(--panel)}
+.role-pill.labuser,.rl-labuser{background:#B08BEA;color:#1d0f33} /* Lab User (D55) */
+/* Menú lateral: secciones (Overview, Test benches, Billing...) › áreas (tarjetas) › categorías › bancos */
+.side>.grp-title,.side .menu-sec{margin:16px 4px 6px;padding:10px 4px 0;border-top:1px solid var(--line);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--turq2)}
+.side .menu-bancos{margin-top:4px}
+.side .area-sel{width:100%;margin:2px 0 6px;padding:5px 6px;border-radius:6px;background:var(--navy);color:var(--text);border:1px solid var(--line);font-size:12px}
+.side .area-menu{margin:8px 0;border:1px solid var(--line);border-left:3px solid var(--turq);border-radius:8px;background:rgba(255,255,255,.025);overflow:hidden}
+.side .area-title{display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;padding:7px 8px;font-size:13px;font-weight:800;color:var(--text);background:rgba(35,188,163,.10)}
+.side .area-title:hover{background:rgba(35,188,163,.18)}
+.side .area-title .flecha{display:inline-block;width:10px;color:var(--turq2)}
+.side .area-title .area-num{margin-left:auto;font-size:10px;font-weight:700;color:var(--muted);background:var(--navy);border-radius:9px;padding:1px 7px}
+.side .area-body{padding:2px 4px 6px}
+.side .area-body .grp-title{margin:8px 2px 2px 6px;padding:1px 0 1px 7px;border-left:3px solid var(--muted);font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.side .area-body .tab{padding:5px 8px 5px 18px;font-size:13px;margin:1px 0}
+.cfg-area{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:14px 0 18px;background:rgba(255,255,255,.02)}
+.cfg-area>.area-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.cfg-area>.area-head h3{margin:0}
+.cfg-area .area-empty{color:var(--muted);font-size:12px;padding:6px 2px}
+
+/* Test Calendar / Working Hours (D59) */
+.horario-cuerpo{display:grid;grid-template-columns:minmax(300px,clamp(420px,30%,560px)) 1fr;gap:14px;align-items:start}
+.horario-lista{max-height:78vh;overflow:auto;padding:8px}
+.horario-lista tr.sel>td{background:rgba(35,188,163,.18)}
+.horario-lista td.hl-test{min-width:0}
+.horario-lista .hl-proyecto{font-weight:700;line-height:1.25}
+.horario-lista .hl-cerrado{margin-left:6px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:8px;padding:0 5px;vertical-align:middle}
+.horario-lista .hl-desc{margin-top:3px;font-size:12.5px;line-height:1.3;color:#9fe3d6;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.horario-lista .hl-sin-desc{color:var(--muted);font-style:italic}
+.horario-lista .hl-meta{margin-top:2px;font-size:11.5px;color:var(--muted)}
+.horario-lista td.hl-fechas{white-space:nowrap;vertical-align:top}
+.horario-lista td{vertical-align:top;padding-top:8px;padding-bottom:8px}
+.horario-acciones .ha-desc{color:var(--muted);font-weight:400}
+.horario-lista tr:hover>td{background:rgba(255,255,255,.04)}
+.horario-campos{display:grid;grid-template-columns:190px 1fr;gap:8px 12px;align-items:center;margin-top:6px}
+.horario-campos>label{color:var(--muted);font-size:13px}
+.horario-resumen{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px}
+.hh-wrap{max-height:72vh;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:8px}
+.hh-rejilla{border-collapse:collapse;user-select:none;font-size:11px;width:100%;min-width:900px;table-layout:fixed}
+.hh-rejilla th{position:sticky;top:0;background:var(--panel2);color:var(--muted);font-weight:600;padding:3px 0 3px 2px;text-align:left;z-index:1;border-left:1px solid rgba(255,255,255,.08);overflow:hidden;white-space:nowrap}
+.hh-rejilla th.hh-dia{position:sticky;left:0;z-index:2;padding:0 8px;font-size:12px;white-space:nowrap;text-align:left;background:var(--panel2)}
+.hh-rejilla tbody th.hh-dia{z-index:1}
+.hh-rejilla td{height:26px;padding:0;border-right:1px solid rgba(0,0,0,.18);border-bottom:2px solid rgba(0,0,0,.35)}
+.hh-rejilla td.hh-hora{border-left:1px solid rgba(0,0,0,.55)}
+.hh-rejilla td.hh-ed{cursor:pointer;touch-action:none}
+.hh-rejilla td.hh-ed:hover{box-shadow:inset 0 0 0 2px rgba(255,255,255,.75)}
+.hh-rejilla td.hh-borde-planta{border-left:2px solid #f5d76e}
+.hh-rejilla th.hh-h-planta{color:var(--text)}
+.hh-rejilla col.hh-col-dia{width:96px}
+.hh-planta-muestra{background:transparent;border-left:2px solid #f5d76e;border-radius:0;width:4px}
+.hh-rejilla tr.hh-festivo th.hh-dia{color:var(--warn)}
+.hh-trabajo{background:#2f8f6a}
+.hh-setup{background:#4C8DFF}
+.hh-parada{background:var(--danger)}
+.hh-pend{background:#8a5a5a}
+.hh-sin{background:#2a3642}
+.hh-fuera{background:transparent}
+.hh-muestra{display:inline-block;width:14px;height:12px;border-radius:2px;margin:0 4px 0 12px;vertical-align:middle}
+.horario-acciones{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;margin-bottom:12px;border:1px solid var(--line);border-left:4px solid var(--turq);border-radius:10px;background:var(--panel);box-shadow:0 6px 14px -8px rgba(0,0,0,.6)}
+.horario-acciones.pendiente{border-left-color:var(--warn);background:var(--warnbg)}
+.horario-acciones .ha-texto{flex:1;min-width:220px}
+.horario-acciones .ha-titulo{font-size:14px}
+.horario-acciones .ha-estado{font-size:12px;color:var(--muted);margin-top:2px}
+.horario-acciones.pendiente .ha-estado{color:var(--warn)}
+.horario-acciones .ha-botones{display:flex;gap:8px;flex-wrap:wrap}
+.card.horario-cambiada{border-color:var(--warn)}
+.horario-marca{margin-left:8px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#2b1d00;background:var(--warn);border-radius:9px;padding:1px 7px;vertical-align:middle}
+.horario-form.editando{background:rgba(245,166,35,.08);border:1px dashed var(--warn);border-radius:8px;padding:6px 8px}
+#horario-paradas tr.sel>td{background:rgba(245,166,35,.15)}
+#horario-rejilla{margin-top:14px}
+.aviso-horario{cursor:help}
+@media (max-width:1100px){.horario-cuerpo{grid-template-columns:1fr}}
+/* Pantallas anchas: Settings y Billing preview lado a lado; Stops debajo a todo el ancho. */
+@media (min-width:1600px){.horario-editor{display:grid;grid-template-columns:1fr 1fr;column-gap:14px;align-items:start}.horario-editor>.card{margin-top:0}#horario-paradas{grid-column:1/-1}}

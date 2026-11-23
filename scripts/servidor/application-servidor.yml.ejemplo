@@ -1,0 +1,14 @@
+# OPCIONAL. Copiar como backend/config/application-servidor.yml (esa carpeta NO se
+# versiona) solo si hay que cambiar algo del modo servidor. Sin este fichero:
+# todas las interfaces de red y puerto 5001.
+server:
+  port: 5001
+  # 0.0.0.0 = todas las interfaces de red. Para una sola, su IP (p. ej. 10.20.30.40).
+  address: 0.0.0.0
+# Inicio de sesión (hito S3). Valores de serie; descomenta solo lo que cambies.
+# planner:
+#   autenticacion:
+#     intentos-maximos: 5     # intentos fallidos seguidos antes del bloqueo
+#     bloqueo: 15m            # duración del bloqueo temporal
+#     inactividad: 30m        # sin clics ni teclas este tiempo, la sesión se cierra
+#     longitud-minima-clave: 10

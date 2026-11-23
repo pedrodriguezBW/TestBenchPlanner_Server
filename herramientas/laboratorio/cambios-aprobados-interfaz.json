@@ -1,0 +1,40 @@
+[
+ {
+  "caso": "^U(C|F(08|09|10|11))",
+  "ruta": "^/tablas/\\d+/cabecera/0$",
+  "referencia": "Mes",
+  "motivo": "D25: la tabla por trimestre de la 4.9.4 titula su primera columna «Mes»; la nueva pone «Trimestre»."
+ },
+ {
+  "caso": "^UE1[45]-",
+  "ruta": "^/hints/1$",
+  "referencia": "",
+  "motivo": "D30: en la 4.9.4 el texto de estado de Users («Guardando… / Guardado en SharePoint.») nunca llega a verse porque la pantalla se vuelve a pintar antes; la versión nueva lo muestra."
+ },
+ {
+  "caso": "^UE21-",
+  "ruta": "^/hints/0$",
+  "motivo": "D26: la cabecera de About muestra la versión nueva (5.0.0) en lugar de 4.9.4 (build 494)."
+ },
+ {
+  "caso": "^UF16-",
+  "ruta": "^/capturas/0/incrustado/(idDb/|filasId$)",
+  "motivo": "D31: la foto de solo lectura incrusta el estado actual de todas las aprobaciones de SharePoint; la 4.9.4 incrustaba su base de IDs local (semilla del HTML más los IDs refrescados), que puede estar desfasada."
+ },
+ {
+  "caso": "^U[EF]",
+  "ruta": "^/menu(/\\d+)?$",
+  "motivo": "D37 (facturación, H5): el menú lateral tiene el grupo nuevo «Billing» (Monthly sheet y, para Admin, Configuration) detrás de «List of Equipments»; la 4.9.4 no tiene facturación."
+ },
+ {
+  "caso": "^UB21-",
+  "ruta": "^/mensajes/0$",
+  "motivo": "D39 (áreas, H7): el mensaje de 📊 Update Yearly Status dice «(ALL / BW / CTAG and by area)» porque la foto semanal guarda también THERMAL, HVCH-CTAG y HVCH-STC."
+ },
+ {
+  "caso": "^UE(08|19|20)-",
+  "ruta": "^/hints/1$",
+  "referencia": "Elige un proyecto para resaltarlo (el resto se atenúa). Arrastra el borde de la 1ª columna para ensancharla.",
+  "motivo": "D40 (Gantt general rediseñado, H8): el texto de ayuda del Gantt del Dashboard explica la tarjeta al pasar el ratón en lugar del foco (el foco tiene ahora su propia ficha)."
+ }
+]
