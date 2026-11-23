@@ -12,6 +12,7 @@
     "src/estado/operacionesOptimistas.ts",
     "src/estado/colaConfiguracion.ts",
     "src/utilidades/ganttModerno.ts",
+    "src/bloques/timing/modelo.ts",
     "src/api/tipos.ts"
   ]
 }

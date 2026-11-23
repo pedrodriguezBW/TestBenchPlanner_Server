@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../api/cliente';
-import type { EstadoCuenta, UsuarioLista } from '../../api/tipos';
+import type { EstadoCuenta, PerfilTiming, UsuarioLista } from '../../api/tipos';
 import { usePlanificador } from '../../estado/Planificador';
 
 /*
@@ -27,11 +27,13 @@ const rolNormal = (r: string) => {
 const ORDEN_ROL: Record<string, number> = { admin: 0, labuser: 1, editor: 2, readonly: 3 };
 const orden = (r: string) => ORDEN_ROL[r] ?? 4;
 const rolGuardado = (r: string) => (r === 'admin' ? 'Admin' : r === 'labuser' ? 'LabUser' : r === 'editor' ? 'Editor' : 'ReadOnly');
+const PERFILES: Record<PerfilTiming, string> = { solicitante: 'Solicitante', tecnico: 'Técnico', coordinador: 'Coordinador' };
+const formularioVacio = { title: '', email: '', role: 'Editor', responsibleName: '', timingRoles: [] as PerfilTiming[] };
 
 export function ConfigUsuarios() {
   const { soloLectura, recargarListas, sesion } = usePlanificador();
   const [usuarios, setUsuarios] = useState<UsuarioLista[] | null>(null);
-  const [form, setForm] = useState({ title: '', email: '', role: 'Editor', responsibleName: '' });
+  const [form, setForm] = useState(formularioVacio);
   const [estado, setEstado] = useState('');
   const modoServidor = !!sesion?.modoServidor;
   const gestionaCuentas = modoServidor && !!sesion?.esAdmin;
@@ -53,11 +55,12 @@ export function ConfigUsuarios() {
     api.usuarios().then((u) => setUsuarios(u.map((x) => ({ ...x, role: rolNormal(x.role) })))).catch(() => setUsuarios([]));
   }, []);
 
-  const guardar = async (lista: UsuarioLista[]) => {
+  const guardar = async (lista: UsuarioLista[], perfilEditado?: string) => {
     setUsuarios(lista);
     setEstado('Guardando...');
     try {
-      await api.guardarUsuarios(lista.map((u) => ({ title: u.title, email: u.email, role: rolGuardado(u.role), responsibleName: u.responsibleName })));
+      await api.guardarUsuarios(lista.map((u) => ({ title: u.title, email: u.email, role: rolGuardado(u.role),
+        responsibleName: u.responsibleName, timingRoles: gestionaCuentas && u.email === perfilEditado ? u.timingRoles : undefined })));
       setEstado(modoServidor ? 'Guardado.' : 'Guardado en SharePoint.');
       await recargarListas();
       leerCuentas();
@@ -71,16 +74,18 @@ export function ConfigUsuarios() {
   const anadir = () => {
     const email = form.email.trim().toLowerCase();
     if (!email) { window.alert('Introduce el email.'); return; }
-    const registro = { title: form.title.trim() || email, email, role: rolNormal(form.role), responsibleName: form.responsibleName.trim() };
+    const registro = { title: form.title.trim() || email, email, role: rolNormal(form.role), responsibleName: form.responsibleName.trim(),
+      timingRoles: gestionaCuentas ? form.timingRoles : undefined };
     const lista = (usuarios ?? []).map((u) => ({ ...u }));
     const i = lista.findIndex((u) => (u.email || '').toLowerCase() === email);
     if (i >= 0) lista[i] = { ...lista[i], ...registro }; else lista.push(registro);
-    setForm({ title: '', email: '', role: 'Editor', responsibleName: '' }); // la 4.9.4 vuelve a pintar el formulario con Editor
-    void guardar(lista);
+    setForm(formularioVacio);
+    void guardar(lista, email);
   };
   const editar = (email: string) => {
     const u = busca(email);
-    if (u) setForm({ title: u.title || '', email: u.email || '', role: rolGuardado(rolNormal(u.role)), responsibleName: u.responsibleName || '' });
+    if (u) setForm({ title: u.title || '', email: u.email || '', role: rolGuardado(rolNormal(u.role)), responsibleName: u.responsibleName || '',
+      timingRoles: u.timingRoles ?? [] });
   };
   const quitar = (email: string) => {
     if (!window.confirm(`Quitar a ${email} de la lista de usuarios?`)) return;
@@ -154,21 +159,30 @@ export function ConfigUsuarios() {
         </select>
         <input className="f" id="u-resp" placeholder="ResponsibleName (p. ej. A. Vide)" style={{ minWidth: 190 }} value={form.responsibleName}
           disabled={soloLectura} onChange={(e) => setForm({ ...form, responsibleName: e.target.value })} />
+        {gestionaCuentas && <fieldset className="timing-perfiles" disabled={soloLectura}>
+          <legend>Timing R&amp;T</legend>
+          {(Object.keys(PERFILES) as PerfilTiming[]).map((perfil) => <label key={perfil}>
+            <input type="checkbox" checked={form.timingRoles.includes(perfil)} onChange={(e) => setForm({
+              ...form, timingRoles: e.target.checked ? [...form.timingRoles, perfil] : form.timingRoles.filter((p) => p !== perfil),
+            })} /> {PERFILES[perfil]}
+          </label>)}
+        </fieldset>}
         <button className="btn sm" disabled={soloLectura} onClick={anadir}>&#65291; Add / Update</button>
         <span className="hint" id="u-status" style={{ marginLeft: 'auto' }}>{estado}</span>
       </div>
       <div className="card" style={{ padding: 0 }}>
         <table className="lst users-tbl">
-          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>ResponsibleName</th>{gestionaCuentas && <th>Account</th>}<th /></tr></thead>
+          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>ResponsibleName</th>{gestionaCuentas && <><th>Timing R&amp;T</th><th>Account</th></>}<th /></tr></thead>
           <tbody>
             {usuarios !== null && !filas.length && (
-              <tr><td colSpan={gestionaCuentas ? 6 : 5} className="empty">No users loaded (backend/list missing). Se sembraran los usuarios por defecto al primer guardado.</td></tr>
+              <tr><td colSpan={gestionaCuentas ? 7 : 5} className="empty">No users loaded (backend/list missing). Se sembraran los usuarios por defecto al primer guardado.</td></tr>
             )}
             {filas.map((u) => (
               <tr key={u.email}>
                 <td><b>{u.title || ''}</b></td><td>{u.email || ''}</td>
                 <td><span className={`rl-badge ${u.role === 'admin' ? 'rl-admin' : u.role === 'labuser' ? 'rl-labuser' : u.role === 'editor' ? 'rl-editor' : 'rl-readonly'}`}>{u.role === 'labuser' ? 'lab user' : u.role || 'readonly'}</span></td>
                 <td>{u.responsibleName || ''}</td>
+                {gestionaCuentas && <td>{u.timingRoles?.map((p) => PERFILES[p]).join(', ') || '—'}</td>}
                 {gestionaCuentas && <td className="u-cuenta">{estadoCuenta(u.email)}</td>}
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   {gestionaCuentas && cuentas[String(u.email || '').toLowerCase()]?.bloqueadaHasta && (

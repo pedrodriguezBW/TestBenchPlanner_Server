@@ -31,6 +31,10 @@ public interface AlmacenCatalogos {
      */
     ObjectNode guardar(JsonNode catalogos);
 
+    default void guardarNumeroProyecto(String proyecto, String numero, String anterior) {
+        throw new ReglaNoCumplida("Project Number se gestiona con PostgreSQL.");
+    }
+
     /** true si las áreas se gestionan desde la aplicación (PostgreSQL, D56). */
     default boolean areasEditables() {
         return false;

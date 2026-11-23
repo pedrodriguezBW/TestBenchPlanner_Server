@@ -59,6 +59,16 @@ final class NavegadorPruebas {
                 .POST(HttpRequest.BodyPublishers.ofString(cuerpo)));
     }
 
+    HttpResponse<String> xlsx(String ruta, byte[] bytes) {
+        String separador = "tbp-timing-pruebas";
+        String inicio = "--" + separador + "\r\nContent-Disposition: form-data; name=\"archivo\"; filename=\"tareas.xlsx\"\r\n\r\n";
+        String fin = "\r\n--" + separador + "--\r\n";
+        HttpRequest.BodyPublisher contenido = HttpRequest.BodyPublishers.concat(HttpRequest.BodyPublishers.ofString(inicio),
+                HttpRequest.BodyPublishers.ofByteArray(bytes), HttpRequest.BodyPublishers.ofString(fin));
+        return enviar(peticion(ruta).header("Content-Type", "multipart/form-data; boundary=" + separador)
+                .header("Origin", base).POST(contenido));
+    }
+
     HttpResponse<String> entrar(String email, String clave) {
         return formulario("/login", Map.of("usuario", email, "clave", clave));
     }

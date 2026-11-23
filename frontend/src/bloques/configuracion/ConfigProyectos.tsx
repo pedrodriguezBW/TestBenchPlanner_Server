@@ -50,6 +50,7 @@ export function ConfigProyectos() {
   const esAdmin = !!sesion?.esAdmin;
   const [proyectos, setProyectos] = useState<string[] | null>(null);
   const [ordenes, setOrdenes] = useState<Record<string, string>>({});
+  const [numeros, setNumeros] = useState<Record<string, string> | undefined>();
   const [nuevo, setNuevo] = useState('');
   const [busqueda, setBusqueda] = useState('');
   const [pegado, setPegado] = useState('');
@@ -60,6 +61,7 @@ export function ConfigProyectos() {
       const c = await api.catalogos();
       setProyectos(c.projects ?? []);
       setOrdenes(c.projectOrders ?? {});
+      setNumeros(c.projectNumbers);
     } catch (e) {
       setProyectos((p) => p ?? []);
       mostrarMensaje(e instanceof Error ? e.message : String(e));
@@ -107,6 +109,16 @@ export function ConfigProyectos() {
     const v = valor.split(/[;\n]+/).map((x) => x.trim()).filter(Boolean).join('; ');
     if (v === (ordenes[p] ?? '')) return;
     void guardar(proyectos ?? [], undefined, { ...ordenes, [p]: v });
+  };
+  const cambiarNumero = (proyecto: string, valor: string) => {
+    const numero = valor.trim();
+    const anterior = numeros?.[proyecto] ?? '';
+    if (numero === anterior) return;
+    colaConfiguracion.encolar({
+      clave: 'numero-proyecto-' + proyecto,
+      fusionable: false,
+      ejecutar: () => api.guardarNumeroProyecto(proyecto, numero, anterior).then(() => undefined),
+    });
   };
 
   if (proyectos === null) return <div className="sec"><h2>&#128193; Projects</h2><div className="hint">Loading&hellip;</div></div>;
@@ -160,11 +172,17 @@ export function ConfigProyectos() {
       )}
       <div className="card" style={{ maxHeight: '52vh', overflow: 'auto', padding: 0 }}>
         <table className="lst">
-          <thead><tr><th>#</th><th>Project</th><th data-solo-nueva="">Billing order</th><th /></tr></thead>
+          <thead><tr><th>#</th><th>Project</th>{numeros && <th data-solo-nueva="">Project Number</th>}<th data-solo-nueva="">Billing order</th><th /></tr></thead>
           <tbody>
             {visibles.length ? visibles.map((p, i) => (
               <tr key={p}>
                 <td style={{ color: 'var(--muted)' }}>{i + 1}</td><td>{p}</td>
+                {numeros && <td data-solo-nueva="">
+                  {puedeEditar ? <input className="f" aria-label={'Project Number: ' + p}
+                    key={p + '|' + (numeros[p] ?? '')} defaultValue={numeros[p] ?? ''} inputMode="numeric"
+                    onBlur={(e) => cambiarNumero(p, e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} /> : (numeros[p] || '—')}
+                </td>}
                 <td data-orden={p} data-solo-nueva="">
                   {esAdmin && !soloLectura ? (
                     <input className="f" key={`${p}|${ordenes[p] ?? ''}`} defaultValue={ordenes[p] ?? ''} placeholder="463B…" disabled={bloqueado}
@@ -176,7 +194,7 @@ export function ConfigProyectos() {
                   {puedeEditar && <button className="icbtn del" title="Delete" onClick={() => void guardar(proyectos.filter((x) => x !== p))}>&#128465;</button>}
                 </td>
               </tr>
-            )) : <tr><td colSpan={4} className="empty">No projects.</td></tr>}
+            )) : <tr><td colSpan={numeros ? 5 : 4} className="empty">No projects.</td></tr>}
           </tbody>
         </table>
       </div>

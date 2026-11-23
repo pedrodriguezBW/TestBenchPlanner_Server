@@ -707,5 +707,7 @@ qué cambia, cómo se activa, puesta en marcha, calendario común y pruebas.
 - [`docs/13-despliegue-servidor.md`](docs/13-despliegue-servidor.md): despliegue
 (S4): instalación como servicio, HTTPS y certificado, copias, restauración,
 actualización, logs, salud, prueba de cierre y problemas frecuentes.
+- [`docs/16-timing-rt.md`](docs/16-timing-rt.md): perfiles, importación de tareas,
+  piloto y corte de Timing R&T.
 - [`herramientas/laboratorio/README.md`](herramientas/laboratorio/README.md): uso
 del laboratorio de paridad.

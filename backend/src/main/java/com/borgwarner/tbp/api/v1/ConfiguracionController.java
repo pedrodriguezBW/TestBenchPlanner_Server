@@ -71,6 +71,14 @@ public class ConfiguracionController {
         return listas.leerCatalogos();
     }
 
+    @PutMapping("/proyectos/numero")
+    public ObjectNode numeroProyecto(@RequestBody JsonNode cuerpo) {
+        sesion.exigirAdminOLabUser(sesion.usuarioActual());
+        catalogos.guardarNumeroProyecto(cuerpo.path("proyecto").asText(""), cuerpo.path("numero").asText("").trim(),
+                cuerpo.path("anterior").asText(""));
+        return JsonJs.objetoVacio().put("ok", true);
+    }
+
     /**
      * Guardar la configuración de bancos y proyectos. Desde D62 solo un Admin o un Lab User
      * (un Editor solo ve los proyectos). La orden contable de los proyectos («projectOrders»,
@@ -144,7 +152,11 @@ public class ConfiguracionController {
 
     @GetMapping("/usuarios")
     public ArrayNode leerUsuarios() {
-        return usuarios.leer();
+        ArrayNode lista = usuarios.leer();
+        if (usuarios.identidadPorPeticion() && !sesion.usuarioActual().esAdmin()) {
+            lista.forEach(u -> ((ObjectNode) u).remove("timingRoles"));
+        }
+        return lista;
     }
 
     @PutMapping("/usuarios")

@@ -8,6 +8,7 @@ import './estilos/base-4.9.4.css';
 import './estilos/aplicacion.css';
 import './estilos/facturacion.css';
 import './estilos/gantt-moderno.css';
+import './estilos/timing.css';
 
 createRoot(document.getElementById('raiz')!).render(
   <StrictMode>

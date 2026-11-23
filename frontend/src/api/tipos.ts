@@ -146,6 +146,8 @@ export interface Conectado {
   me: boolean;
 }
 
+export type PerfilTiming = 'solicitante' | 'tecnico' | 'coordinador';
+
 export interface Sesion {
   email: string;
   nombre: string;
@@ -157,6 +159,7 @@ export interface Sesion {
   copiaSinConexion?: string;
   /** Hito S2: la aplicación corre en el servidor y es compartida (sin /clasico ni datos «de este PC»). */
   modoServidor?: boolean;
+  timingRoles?: PerfilTiming[];
 }
 
 /** Estado de la cuenta (contraseña) de una persona de Users/Rights Management (modo servidor, hito S3). */
@@ -386,6 +389,7 @@ export interface BancoCatalogo {
 
 /** Un usuario de TestBenchUsers. */
 export interface UsuarioLista {
+  timingRoles?: PerfilTiming[];
   title: string;
   email: string;
   role: string;

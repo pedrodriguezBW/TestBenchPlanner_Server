@@ -50,11 +50,12 @@ export async function peticion<T>(metodo: string, ruta: string, cuerpo?: unknown
   try {
     // El código de la pestaña permite al backend descartar sus consultas si se recarga o se cierra.
     const cabeceras: Record<string, string> = { 'X-TBP-Pestana': codigoPestana(), 'X-TBP-Inactivo': String(segundosInactivo()) };
-    if (cuerpo !== undefined) cabeceras['Content-Type'] = 'application/json';
+    const formulario = cuerpo instanceof FormData;
+    if (cuerpo !== undefined && !formulario) cabeceras['Content-Type'] = 'application/json';
     respuesta = await fetch(ruta, {
       method: metodo,
       headers: cabeceras,
-      body: cuerpo === undefined ? undefined : JSON.stringify(cuerpo),
+      body: formulario ? cuerpo : cuerpo === undefined ? undefined : JSON.stringify(cuerpo),
     });
   } catch {
     throw new ErrorSinConexion();
@@ -96,7 +97,9 @@ export const api = {
   presencia: () => peticion<{ me: string; online: Conectado[] }>('POST', '/api/v1/presencia', {}),
   version: () => peticion<{ backend: string; published: string }>('GET', '/api/v1/version'),
   planificacion: () => peticion<Vista>('GET', '/api/v1/planificacion'),
-  catalogos: () => peticion<{ projects: string[]; responsibles: string[]; benches?: BancoCatalogo[]; projectOrders?: Record<string, string>; areaNames?: Record<string, string> }>('GET', '/api/v1/catalogos'),
+  catalogos: () => peticion<{ projects: string[]; responsibles: string[]; benches?: BancoCatalogo[]; projectOrders?: Record<string, string>; projectNumbers?: Record<string, string>; areaNames?: Record<string, string> }>('GET', '/api/v1/catalogos'),
+  guardarNumeroProyecto: (proyecto: string, numero: string, anterior: string) =>
+    peticion<{ ok: boolean }>('PUT', '/api/v1/proyectos/numero', { proyecto, numero, anterior }),
   usuarios: () => peticion<UsuarioLista[]>('GET', '/api/v1/usuarios'),
 
   editarCampos: (banco: string, id: string, cambios: CambioCampo[], version: string | null, forzar = false) =>

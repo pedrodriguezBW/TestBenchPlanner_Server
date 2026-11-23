@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { api } from './api/cliente';
 import { VistaBanco } from './bloques/banco/VistaBanco';
 import { exportarSoloLectura } from './bloques/exportaciones/descargas';
@@ -18,6 +18,7 @@ import { VistaRecursos } from './bloques/recursos/VistaRecursos';
 import { VistaHojaMensual } from './bloques/facturacion/VistaHojaMensual';
 import { VistaRegistroFacturacion } from './bloques/facturacion/VistaRegistroFacturacion';
 import { VistaConfiguracionFacturacion } from './bloques/facturacion/VistaConfiguracionFacturacion';
+import { enlaceTiming, leerRutaTiming, vistaInicialTiming, vistasTiming, VISTAS_TIMING } from './bloques/timing/modelo';
 import { Avisos, DialogoConflicto } from './componentes/Avisos';
 import { AvisoSinConexion, AvisoVersion, Bienvenida, Presencia } from './componentes/Colaboracion';
 import { usePlanificador, type EstadoSincronizacion } from './estado/Planificador';
@@ -33,6 +34,7 @@ import type { Vista } from './api/tipos';
  */
 
 const VERSION = '5.0.0';
+const WorkspaceTiming = lazy(() => import('./bloques/timing/WorkspaceTiming').then((m) => ({ default: m.WorkspaceTiming })));
 
 const SINCRONIZACION: Record<EstadoSincronizacion, [string, string]> = {
   ok: ['\u25CF Synced', 'var(--ok)'],
@@ -43,7 +45,24 @@ const SINCRONIZACION: Record<EstadoSincronizacion, [string, string]> = {
 };
 
 function leerRuta(): string {
-  return decodeURIComponent(window.location.hash.replace(/^#\/?/, '')) || '';
+  return window.location.hash;
+}
+
+function rutaPlanner(hash: string): string {
+  if (leerRutaTiming(hash)) return '';
+  try {
+    return decodeURIComponent(hash.replace(/^#\/?/, ''));
+  } catch {
+    return '';
+  }
+}
+
+function guardarRuta(clave: string, ruta: string) {
+  try { window.sessionStorage.setItem(clave, ruta); } catch { /* El navegador puede desactivar el almacenamiento. */ }
+}
+
+function recuperarRuta(clave: string, defecto: string) {
+  try { return window.sessionStorage.getItem(clave) || defecto; } catch { return defecto; }
 }
 
 export function App() {
@@ -55,11 +74,43 @@ export function App() {
     window.addEventListener('hashchange', alCambiar);
     return () => window.removeEventListener('hashchange', alCambiar);
   }, []);
+  useEffect(() => {
+    const destino = recuperarRuta('tbp-timing-destino', '');
+    if (!destino) return;
+    guardarRuta('tbp-timing-destino', '');
+    const ruta = leerRutaTiming(destino);
+    if (!window.location.hash && ruta && !ruta.invalida) window.location.replace(destino);
+  }, []);
 
   const ir = (destino: string) => { window.location.hash = '/' + encodeURIComponent(destino); };
   const bancos = vista ? vista.grupos.flatMap((g) => g.bancos.map((b) => b.nombre)) : [];
   // Sin ruta se abre el Dashboard, como en la 4.9.4.
-  const pantalla = actual || '__dash__';
+  const pantalla = rutaPlanner(actual) || '__dash__';
+  const rutaTiming = leerRutaTiming(actual);
+  const vistas = sesion ? vistasTiming(sesion) : [];
+  const puedeTiming = vistas.length > 0;
+  const vistaTiming = rutaTiming?.vista ?? vistaInicialTiming(vistas);
+  const timingValido = !!rutaTiming && !rutaTiming.invalida && vistas.includes(vistaTiming);
+  const [ultimaPlanner, setUltimaPlanner] = useState(() => recuperarRuta('tbp-ultima-planner', '#/'));
+  const [ultimaTiming, setUltimaTiming] = useState(() => recuperarRuta('tbp-ultima-timing', enlaceTiming()));
+  const vistaRecordada = leerRutaTiming(ultimaTiming)?.vista;
+  const destinoTiming = vistaRecordada && vistas.includes(vistaRecordada) ? ultimaTiming : enlaceTiming();
+  useEffect(() => {
+    if (timingValido) {
+      const enlace = enlaceTiming(vistaTiming, rutaTiming?.id);
+      setUltimaTiming(enlace);
+      guardarRuta('tbp-ultima-timing', enlace);
+    }
+  }, [timingValido, vistaTiming, rutaTiming?.id]);
+  useEffect(() => {
+    const pantallas = ['__dash__', '__resp__', '__kpihist__', '__resources__', '__rescfg__', '__benches__', '__areas__',
+      '__horario__', '__projects__', '__users__', '__tools__', '__about__', '__activity__',
+      '__billing_sheet__', '__billing_registro__', '__billing_config__'];
+    if (!rutaTiming && (pantallas.includes(pantalla) || vista?.grupos.some((g) => g.bancos.some((b) => b.nombre === pantalla)))) {
+      setUltimaPlanner(actual || '#/');
+      guardarRuta('tbp-ultima-planner', actual || '#/');
+    }
+  }, [actual, pantalla, vista, rutaTiming]);
   const esAdmin = !!sesion?.esAdmin;
   // Lab User (D55): todo lo de un Editor y, además, la gestión de las áreas, los bancos (D58) y el horario de los ensayos (D59).
   const esLabUser = sesion?.rol === 'labuser';
@@ -86,41 +137,73 @@ export function App() {
   const pestana = (clave: string, contenido: ReactNode) => (
     <div key={clave} className={`tab ${pantalla === clave ? 'active' : ''}`} onClick={() => ir(clave)}>{contenido}</div>
   );
+  const olvidarRutas = () => {
+    guardarRuta('tbp-ultima-planner', '');
+    guardarRuta('tbp-ultima-timing', '');
+  };
 
   return (
-    <div className={soloLectura ? 'ro' : ''}>
-      <header className="topbar">
+    <div className={[soloLectura && !rutaTiming ? 'ro' : '', puedeTiming ? 'tbp-dos-apps' : '', rutaTiming ? 'timing-shell' : ''].join(' ')}>
+      <header className={puedeTiming ? 'topbar topbar-apps' : 'topbar'}>
         <div className="logo-chip"><img src="/logo.png" alt="BorgWarner" /></div>
-        <h1>
-          Test Bench Planning <span className="build-tag">v{VERSION}</span>
-          {sesion && <span className={`role-pill ${sesion.rol}`}>{sesion.rol === 'readonly' ? 'Read only' : sesion.rol === 'labuser' ? 'Lab User' : sesion.rol}</span>}
-        </h1>
+        {puedeTiming && <nav className="apps-selector" aria-label="Aplicaciones">
+          <a href={ultimaPlanner} aria-current={!rutaTiming ? 'page' : undefined}>TestBenchPlanner</a>
+          <a href={rutaTiming && timingValido ? actual : destinoTiming} aria-current={timingValido ? 'page' : undefined}>Timing R&amp;T</a>
+        </nav>}
+        {!rutaTiming && <h1 className={puedeTiming ? 'topbar-cuenta-rol' : undefined}>
+          {!puedeTiming && 'Test Bench Planning'} <span className="build-tag">v{VERSION}</span>
+          {sesion && !rutaTiming && <span className={`role-pill ${sesion.rol}`}>{sesion.rol === 'readonly' ? 'Read only' : sesion.rol === 'labuser' ? 'Lab User' : sesion.rol}</span>}
+        </h1>}
         <div className="spacer" />
         {!sesion?.modoServidor && <a className="btn ghost sm no-print" href="/clasico" title="Interfaz 4.9.4 (respaldo)">Versión clásica</a>}
-        <Presencia activa={!!sesion && !copiaSinConexion} />
-        {esAdmin && vista && (
+        {!rutaTiming && <Presencia activa={!!sesion && !copiaSinConexion} />}
+        {esAdmin && vista && !rutaTiming && (
           <button onClick={() => void exportarFotoSoloLectura()} title="Exportar una foto HTML de solo lectura para el proveedor">&#128228; Export read-only</button>
         )}
-        <span id="sp-status" style={{ fontSize: 12, fontWeight: 600, color: colorSync, margin: '0 8px', whiteSpace: 'nowrap' }}>{textoSync}</span>
-        <button onClick={() => window.print()}>&#128424; Print</button>
-        {sesion?.modoServidor && (
+        {!rutaTiming && <span id="sp-status" style={{ fontSize: 12, fontWeight: 600, color: colorSync, margin: '0 8px', whiteSpace: 'nowrap' }}>{textoSync}</span>}
+        {!rutaTiming && <button onClick={() => window.print()}>&#128424; Print</button>}
+        {sesion?.modoServidor && (rutaTiming ? <details className="timing-cuenta no-print">
+          <summary id="cuenta-nombre" title={sesion.email}>{sesion.nombre || sesion.email}</summary>
+          <div className="timing-cuenta-menu">
+            <a href="/cambiar-clave">Cambiar contraseña</a>
+            <button type="button" onClick={() => window.print()}>Imprimir</button>
+            <form method="post" action="/logout" onSubmit={olvidarRutas}>
+              <button type="submit">Cerrar sesión</button>
+            </form>
+          </div>
+        </details> : (
           <span className="no-print" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 8 }}>
             <span id="cuenta-nombre" title={sesion.email} style={{ fontSize: 12, opacity: 0.85, whiteSpace: 'nowrap' }}>&#128100; {sesion.nombre || sesion.email}</span>
             <a className="btn ghost sm" id="cuenta-clave" href="/cambiar-clave" title="Cambiar tu contraseña de TestBenchPlanner">&#128273; Password</a>
-            <form method="post" action="/logout" style={{ display: 'inline', margin: 0 }}>
+            <form method="post" action="/logout" style={{ display: 'inline', margin: 0 }} onSubmit={olvidarRutas}>
               <button type="submit" className="btn ghost sm" id="cuenta-salir" title="Cerrar la sesión">Log out</button>
             </form>
           </span>
-        )}
+        ))}
       </header>
       <AvisoVersion version={VERSION} />
-      {sincronizacion === 'bloqueado' && (
+      {!rutaTiming && sincronizacion === 'bloqueado' && (
         <div id="lock-banner" style={{ display: 'block' }}>&#128274; <b>SIN CONEXI&Oacute;N CON SHAREPOINT</b> &middot; no se ha podido leer el servidor,
           as&iacute; que la app est&aacute; en <b>solo lectura</b> para proteger los datos. <b>No se guardar&aacute; nada.</b> Cierra y vuelve a abrir cuando tengas sesi&oacute;n.</div>
       )}
-      <AvisoSinConexion copia={copiaSinConexion} />
-      <Bienvenida sesion={sesion} />
-      <div className="layout">
+      {!rutaTiming && <AvisoSinConexion copia={copiaSinConexion} />}
+      {!rutaTiming && <Bienvenida sesion={sesion} />}
+      {rutaTiming ? <div className="layout timing-layout">
+        {timingValido && sesion ? <>
+          <nav className="timing-menu" aria-label="Timing R&T">
+            {vistas.map((v) => <a key={v} href={enlaceTiming(v)}
+              aria-current={v === vistaTiming ? 'page' : undefined}>{VISTAS_TIMING[v]}</a>)}
+          </nav>
+          <Suspense fallback={<main id="main"><p className="hint">Cargando Timing R&amp;T…</p></main>}>
+            <WorkspaceTiming vista={vistaTiming} id={rutaTiming.id} sesion={sesion} />
+          </Suspense>
+        </> : <main id="main"><section className="card">
+          <h2>Timing R&amp;T</h2>
+          <p role="status">{!sesion && sincronizacion === 'conectando' ? 'Comprobando acceso…' :
+            !puedeTiming ? 'Tu cuenta no tiene acceso a Timing R&T.' : 'Esta vista no existe o tu perfil no permite abrirla.'}</p>
+          <a className="btn ghost" href={puedeTiming ? enlaceTiming() : ultimaPlanner}>{puedeTiming ? 'Volver a Timing R&T' : 'Volver a TestBenchPlanner'}</a>
+        </section></main>}
+      </div> : <div className="layout">
         <nav className="side" id="side">
           <div className="menu-sec" style={{ marginTop: 0, borderTop: 'none', paddingTop: 0 }}>Overview</div>
           {pestana('__dash__', <>&#128202; Dashboard</>)}
@@ -172,7 +255,7 @@ export function App() {
           {vista && pantalla === '__billing_registro__' && <VistaRegistroFacturacion />}
           {vista && pantalla === '__billing_config__' && (esAdmin ? <VistaConfiguracionFacturacion /> : <VistaDashboard />)}
         </main>
-      </div>
+      </div>}
       <datalist id="dl-types">{TIPOS_DE_ENSAYO.map((t) => <option key={t} value={t} />)}</datalist>
       <datalist id="dl-resp">{personas.map((p) => <option key={p} value={p} />)}</datalist>
       <datalist id="dl-proj">{proyectosUsados.map((p) => <option key={p} value={p} />)}</datalist>

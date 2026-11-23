@@ -65,6 +65,8 @@ final class PaginasAcceso {
                         + "<label for=\"clave\">Contraseña</label>"
                         + "<input id=\"clave\" name=\"clave\" type=\"password\" autocomplete=\"current-password\" required>"
                         + "<button type=\"submit\">Entrar</button></form>"
+                        + "<script>try{if(/^#\\/timing\\/[a-z]*(?:\\/tarea\\/[0-9]+)?$/.test(location.hash))"
+                        + "sessionStorage.setItem('tbp-timing-destino',location.hash)}catch(e){}</script>"
                         + "<div class=\"nota\">Es una contraseña de TestBenchPlanner, no la de Windows. "
                         + "¿Primer acceso o la has olvidado? Pide a un Admin una contraseña temporal "
                         + "(Configuration › Users/Rights Management).</div>");

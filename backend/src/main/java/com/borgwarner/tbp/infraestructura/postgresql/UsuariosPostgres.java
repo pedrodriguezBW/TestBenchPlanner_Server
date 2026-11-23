@@ -3,6 +3,7 @@ package com.borgwarner.tbp.infraestructura.postgresql;
 import com.borgwarner.tbp.aplicacion.puertos.AlmacenUsuarios;
 import com.borgwarner.tbp.dominio.comun.JsonJs;
 import com.borgwarner.tbp.dominio.listas.ProteccionListas;
+import com.borgwarner.tbp.dominio.operaciones.ReglaNoCumplida;
 import com.borgwarner.tbp.dominio.usuarios.Usuario;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -12,6 +13,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashSet;
 import java.util.function.Supplier;
 
 /**
@@ -66,13 +68,24 @@ public class UsuariosPostgres implements AlmacenUsuarios {
     @Override
     public ArrayNode leer() {
         ArrayNode salida = JsonJs.mapper().createArrayNode();
-        bd.jdbc().query("SELECT titulo, email, rol, nombre_responsable FROM usuario ORDER BY id", (java.sql.ResultSet rs) -> {
+        bd.jdbc().query("SELECT u.titulo, u.email, u.rol, u.nombre_responsable, "
+                + "(SELECT string_agg(p.perfil, ',' ORDER BY p.perfil) FROM timing_perfil p WHERE p.email = u.email) AS timing "
+                + "FROM usuario u ORDER BY u.id", (java.sql.ResultSet rs) -> {
             while (rs.next()) {
                 ObjectNode u = salida.addObject();
                 u.put("title", rs.getString("titulo") == null ? "" : rs.getString("titulo"));
                 u.put("email", rs.getString("email").trim().toLowerCase());
                 u.put("role", Usuario.normalizarRol(rs.getString("rol") == null ? "" : rs.getString("rol")));
                 u.put("responsibleName", rs.getString("nombre_responsable") == null ? "" : rs.getString("nombre_responsable"));
+                if (deSesion != null) {
+                    ArrayNode perfiles = u.putArray("timingRoles");
+                    String timing = rs.getString("timing");
+                    if (timing != null) {
+                        for (String perfil : timing.split(",")) {
+                            perfiles.add(perfil);
+                        }
+                    }
+                }
             }
             return null;
         });
@@ -115,9 +128,41 @@ public class UsuariosPostgres implements AlmacenUsuarios {
                     permitirVacias);
             ObjectNode r = JsonJs.objetoVacio().put("ok", true).set("users", Reconciliador.reconciliar(bd, "usuario", "email",
                     List.of("titulo", "rol", "nombre_responsable"), filas, true, "usuario", bd.actor(), null).json());
+            if (deSesion != null) {
+                for (JsonNode usuario : usuarios.path("users")) {
+                    if (usuario.has("timingRoles")) {
+                        guardarPerfiles(usuario.path("email").asText().trim().toLowerCase(java.util.Locale.ROOT),
+                                usuario.get("timingRoles"));
+                    }
+                }
+            }
             // Quien sale de la lista pierde su cuenta (hito S3).
             bd.jdbc().update("DELETE FROM credencial c WHERE NOT EXISTS (SELECT 1 FROM usuario u WHERE u.email = c.email)");
             return r;
         });
+    }
+
+    private void guardarPerfiles(String email, JsonNode datos) {
+        if (email.isBlank() || !datos.isArray()) {
+            throw new ReglaNoCumplida("Indica el correo y los perfiles de Timing R&T.");
+        }
+        var perfiles = new LinkedHashSet<String>();
+        for (JsonNode perfil : datos) {
+            if (!List.of("solicitante", "tecnico", "coordinador").contains(perfil.asText())) {
+                throw new ReglaNoCumplida("Perfil de Timing R&T desconocido.");
+            }
+            perfiles.add(perfil.asText());
+        }
+        List<String> anteriores = bd.jdbc().queryForList("SELECT perfil FROM timing_perfil WHERE email = ? ORDER BY perfil",
+                String.class, email);
+        if (perfiles.equals(new LinkedHashSet<>(anteriores))) {
+            return;
+        }
+        bd.jdbc().update("DELETE FROM timing_perfil WHERE email = ?", email);
+        for (String perfil : perfiles) {
+            bd.jdbc().update("INSERT INTO timing_perfil (email, perfil) VALUES (?, ?)", email, perfil);
+        }
+        Auditoria.anotar(bd, bd.actor(), "timing_perfil", email, Auditoria.MODIFICACION,
+                String.join(", ", anteriores), String.join(", ", perfiles));
     }
 }

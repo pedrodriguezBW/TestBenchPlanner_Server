@@ -140,6 +140,7 @@ export function ProveedorPlanificador({ children }: { children: ReactNode }) {
     await Promise.all([
       api.catalogos().then((c) => { setProyectos(c.projects ?? []); setResponsablesCatalogo(c.responsibles ?? []); }).catch(() => undefined),
       api.usuarios().then((u) => setUsuariosResp(u.map((x) => (x.responsibleName ?? '').trim()).filter(Boolean))).catch(() => undefined),
+      sesionRef.current?.modoServidor ? api.sesion().then(setSesion).catch(() => undefined) : undefined,
     ]);
   }, []);
   const [estadosAprobacion, setEstadosAprobacion] = useState<Record<string, string>>({});
@@ -460,9 +461,9 @@ export function ProveedorPlanificador({ children }: { children: ReactNode }) {
       let vista: Vista | null = null;
       for (let intento = 0; intento < 3 && !vista; intento++) {
         try {
-          const [s, v] = await Promise.all([api.sesion(), api.planificacion()]);
+          const sesionInicial = api.sesion().then((s) => { if (!cancelado) setSesion(s); });
+          const [, v] = await Promise.all([sesionInicial, api.planificacion()]);
           if (cancelado) return;
-          setSesion(s);
           vista = v;
         } catch {
           await new Promise((r) => window.setTimeout(r, 1500));

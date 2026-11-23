@@ -59,12 +59,16 @@ public class CatalogosPostgres implements AlmacenCatalogos {
         });
         ArrayNode proyectos = salida.putArray("projects");
         ObjectNode ordenes = salida.putObject("projectOrders");
-        bd.jdbc().query("SELECT titulo, orden_facturacion FROM proyecto" + ORDEN_SEQ, (java.sql.ResultSet rs) -> {
+        ObjectNode numeros = salida.putObject("projectNumbers");
+        bd.jdbc().query("SELECT titulo, orden_facturacion, numero_proyecto FROM proyecto" + ORDEN_SEQ, (java.sql.ResultSet rs) -> {
             while (rs.next()) {
                 proyectos.add(rs.getString(1));
                 String orden = rs.getString(2) == null ? "" : rs.getString(2).trim();
                 if (!orden.isEmpty()) {
                     ordenes.put(rs.getString(1), orden);
+                }
+                if (rs.getString(3) != null) {
+                    numeros.put(rs.getString(1), rs.getString(3));
                 }
             }
             return null;
@@ -102,6 +106,23 @@ public class CatalogosPostgres implements AlmacenCatalogos {
             Areas.definiciones(guardadas, Map.of()).forEach(d -> areas.addObject().put("code", d.codigo()).put("organization", d.organizacion()));
         }
         return salida;
+    }
+
+    @Override
+    public void guardarNumeroProyecto(String proyecto, String numero, String anterior) {
+        if (!numero.isEmpty() && !numero.matches("[0-9]{1,40}")) {
+            throw new ReglaNoCumplida("Introduce un número de proyecto de hasta 40 dígitos.");
+        }
+        bd.enTransaccion(() -> {
+            bd.bloquear(CERROJO);
+            int cambios = bd.jdbc().update("UPDATE proyecto SET numero_proyecto = NULLIF(?, '') "
+                    + "WHERE titulo = ? AND coalesce(numero_proyecto, '') = ?", numero, proyecto, anterior);
+            if (cambios == 0) {
+                throw new ReglaNoCumplida("El proyecto ha cambiado. Recarga la lista antes de guardar.");
+            }
+            Auditoria.anotar(bd, bd.actor(), "proyecto", proyecto, Auditoria.MODIFICACION, anterior, numero);
+            return null;
+        });
     }
 
     /** Valor de la columna Area: el código del área de serie; vacío para Bancos Térmicos (como en SharePoint). */

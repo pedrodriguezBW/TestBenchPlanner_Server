@@ -15,6 +15,7 @@ import com.borgwarner.tbp.dominio.operaciones.OperacionesBanco;
 import com.borgwarner.tbp.dominio.operaciones.ReglaNoCumplida;
 import com.borgwarner.tbp.dominio.planificacion.ResultadoPlan;
 import com.borgwarner.tbp.dominio.usuarios.Usuario;
+import com.borgwarner.tbp.infraestructura.postgresql.TimingPostgres;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -57,16 +58,19 @@ public class PlanificacionController {
     private final EstadoConexion conexion;
     /** Modo servidor (S2): la interfaz oculta lo que no tiene sentido en una aplicación compartida. */
     private final boolean modoServidor;
+    private final org.springframework.beans.factory.ObjectProvider<TimingPostgres> timing;
 
     public PlanificacionController(ServicioPlanificacion servicio, ServicioSesion sesion, Reloj reloj,
                                    ServicioConfiguracionBancos configuracionBancos, EstadoConexion conexion,
-                                   com.borgwarner.tbp.configuracion.PropiedadesPlanner propiedades) {
+                                   com.borgwarner.tbp.configuracion.PropiedadesPlanner propiedades,
+                                   org.springframework.beans.factory.ObjectProvider<TimingPostgres> timing) {
         this.modoServidor = propiedades.servidor().activo();
         this.conexion = conexion;
         this.servicio = servicio;
         this.sesion = sesion;
         this.reloj = reloj;
         this.configuracionBancos = configuracionBancos;
+        this.timing = timing;
     }
 
     @GetMapping("/sesion")
@@ -77,6 +81,8 @@ public class PlanificacionController {
                 .put("rol", u.rol()).put("esAdmin", u.esAdmin()).put("soloLectura", u.soloLectura());
         if (modoServidor) {
             salida.put("modoServidor", true); // solo en el servidor: fuera de él la respuesta no cambia
+            ArrayNode perfiles = salida.putArray("timingRoles");
+            timing.getObject().perfiles(u.email()).forEach(perfiles::add);
         }
         return conCopia(salida);
     }
