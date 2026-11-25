@@ -1,8 +1,10 @@
 package com.borgwarner.tbp.aplicacion;
 
 import com.borgwarner.tbp.aplicacion.puertos.AlmacenHistoricoKpi;
+import com.borgwarner.tbp.aplicacion.puertos.Reloj;
 import com.borgwarner.tbp.dominio.calendario.Fechas;
 import com.borgwarner.tbp.dominio.ensayo.Ensayo;
+import com.borgwarner.tbp.dominio.kpi.EstadoFotos;
 import com.borgwarner.tbp.dominio.kpi.Estadisticas;
 import com.borgwarner.tbp.dominio.kpi.FiltroOrganizacion;
 import com.borgwarner.tbp.dominio.kpi.FotoSemanal;
@@ -11,6 +13,7 @@ import com.borgwarner.tbp.dominio.kpi.IndicadoresSemana;
 import com.borgwarner.tbp.dominio.kpi.Ocupacion;
 import com.borgwarner.tbp.dominio.kpi.PanelDashboard;
 import com.borgwarner.tbp.dominio.planificacion.Grupo;
+import com.borgwarner.tbp.infraestructura.comun.FilaKpi;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Service;
@@ -28,11 +31,19 @@ public class ServicioIndicadores {
 
     private final ServicioPlanificacion planificacion;
     private final AlmacenHistoricoKpi historico;
+    private final Reloj reloj;
 
-    public ServicioIndicadores(ServicioPlanificacion planificacion, AlmacenHistoricoKpi historico) {
+    public ServicioIndicadores(ServicioPlanificacion planificacion, AlmacenHistoricoKpi historico, Reloj reloj) {
         this.planificacion = planificacion;
         this.historico = historico;
+        this.reloj = reloj;
     }
+
+    /** Quién tomó la foto semanal (D64). */
+    public static final String MANUAL = "manual";
+    public static final String AUTOMATICA = "auto";
+    public static final String EXPORTACION = "export";
+    public static final List<String> ORIGENES = List.of(MANUAL, AUTOMATICA, EXPORTACION);
 
     /** Bloques «Esta semana» y «Semana que viene» a partir del lunes indicado. */
     public Map<String, IndicadoresSemana.Bloque> bloques(Vista vista, LocalDate lunes, String organizacion) {
@@ -89,10 +100,31 @@ public class ServicioIndicadores {
      * histórico (sustituye la de esa semana). Como en la 4.9.4, no depende del rol.
      */
     public List<ObjectNode> guardarFotoSemanal() {
+        return guardarFotoSemanal(MANUAL);
+    }
+
+    /**
+     * Foto de la semana de hoy (sobrescribe la anterior de la misma semana).
+     * Se guarda con su origen y su instante; se devuelve tal cual la 4.9.4.
+     */
+    public List<ObjectNode> guardarFotoSemanal(String origen) {
         Vista vista = planificacion.vista();
         List<ObjectNode> fotos = FotoSemanal.tomar(vista.planificacion(), vista.plan());
-        historico.guardarFotos(fotos);
+        String instante = reloj.ahora().truncatedTo(java.time.temporal.ChronoUnit.SECONDS).toString();
+        List<ObjectNode> aGuardar = new ArrayList<>();
+        for (ObjectNode foto : fotos) {
+            ObjectNode copia = foto.deepCopy();
+            copia.put(FilaKpi.ORIGEN, ORIGENES.contains(origen) ? origen : MANUAL);
+            copia.put(FilaKpi.INSTANTE, instante);
+            aGuardar.add(copia);
+        }
+        historico.guardarFotos(aGuardar);
         return fotos;
+    }
+
+    /** Estado de la foto de cada semana del histórico (cerrada, provisional, en curso). */
+    public List<EstadoFotos.Estado> estadoFotos(String organizacion) {
+        return EstadoFotos.semanas(historico.leer(), organizacion, reloj.hoy());
     }
 
     public List<HistoricoKpi.Semana> historico(String organizacion) {

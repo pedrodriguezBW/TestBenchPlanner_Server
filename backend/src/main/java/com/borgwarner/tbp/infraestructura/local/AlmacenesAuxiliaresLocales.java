@@ -148,6 +148,7 @@ public final class AlmacenesAuxiliaresLocales {
             int creadas = 0, actualizadas = 0;
             for (ObjectNode foto : fotos) {
                 ObjectNode fila = FilaKpi.desdeFoto(foto);
+                FilaKpi.anadirOrigen(fila, foto);
                 boolean sustituida = false;
                 for (int i = 0; i < filas.size(); i++) {
                     JsonNode f = filas.get(i);

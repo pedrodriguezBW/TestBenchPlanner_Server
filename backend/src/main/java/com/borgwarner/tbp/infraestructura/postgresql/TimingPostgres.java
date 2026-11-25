@@ -9,7 +9,11 @@ import com.borgwarner.tbp.dominio.usuarios.Usuario;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -26,9 +30,13 @@ import java.util.NoSuchElementException;
 @ConditionalOnProperty(name = "planner.servidor.activo", havingValue = "true")
 public class TimingPostgres {
 
+    private static final Logger LOG = LoggerFactory.getLogger(TimingPostgres.class);
+
     public static final String CAMARA_CLIMATICA = "Cámara Climática";
     public static final List<String> TIPOS = List.of("EGM", "HEAT", "TEST", "CAL", "e-Cooler", "LAB", "IIGG");
     private static final List<String> CAMPOS_TEXTO = List.of("descripcion", "piezasCodigo", "ruta", "otrosEquipos");
+    /** Orden diario de una tarea sin ordenar (como en el Excel). */
+    static final int ORDEN_POR_DEFECTO = 9;
     private static final String ABIERTAS = "datos->>'estado' IN ('pendiente', 'en-proceso')";
     private static final String COLUMNAS = "id, origen_id, codigo, version, datos";
     private static final String NOMBRES = " || jsonb_build_object("
@@ -80,7 +88,8 @@ public class TimingPostgres {
         TIPOS.forEach(opciones.putArray("tipos")::add);
         ArrayNode proyectos = opciones.putArray("proyectos");
         bd.jdbc().query("SELECT id, titulo, numero_proyecto FROM proyecto ORDER BY titulo", (ResultSet rs) -> {
-            proyectos.addObject().put("id", rs.getLong(1)).put("nombre", rs.getString(2)).put("cuenta", rs.getString(3));
+            proyectos.addObject().put("id", rs.getLong(1)).put("nombre", rs.getString(2)).put("cuenta", rs.getString(3))
+                    .put("etiqueta", NombresProyecto.etiqueta(rs.getString(2), rs.getString(3)));
         });
         ArrayNode personas = opciones.putArray("personas");
         bd.jdbc().query("SELECT u.email, u.titulo, EXISTS (SELECT 1 FROM timing_perfil p "
@@ -188,6 +197,52 @@ public class TimingPostgres {
             editarDatos(acceso, datos, cuerpo);
             datos.put("disponible", false);
             return insertar(acceso, datos, "creada");
+        });
+    }
+
+    /**
+     * Panel «Orden diario»: el coordinador fija de una vez el orden diario de las
+     * tareas abiertas de un técnico. Cuerpo: {tecnico, tareas: [{id, version, ordenDiario}]}.
+     * Todo o nada: si alguna tarea ha cambiado desde que se abrió el panel, no se guarda ninguna.
+     */
+    public ObjectNode ordenarCola(Acceso acceso, JsonNode cuerpo) {
+        permiso(acceso.coordina());
+        String tecnico = texto(cuerpo, "tecnico");
+        regla(!tecnico.isEmpty(), "Selecciona el técnico.");
+        JsonNode lista = cuerpo.path("tareas");
+        regla(lista.isArray() && lista.size() <= 2000, "Indica las tareas que quieres ordenar.");
+        return bd.enTransaccion(() -> {
+            int cambiadas = 0;
+            ArrayNode tareas = JsonJs.mapper().createArrayNode();
+            java.util.Set<Long> vistas = new java.util.HashSet<>();
+            for (JsonNode n : lista) {
+                long id = n.path("id").asLong(0);
+                regla(id > 0 && vistas.add(id), "Lista de tareas no válida.");
+                Tarea tarea = bloquear(acceso, id);
+                if (n.path("version").asInt(-1) != tarea.version()) {
+                    throw new Conflicto();
+                }
+                ObjectNode datos = tarea.datos();
+                String estado = texto(datos, "estado");
+                regla("pendiente".equals(estado) || "en-proceso".equals(estado), "La tarea " + tarea.codigo() + " ya está cerrada.");
+                regla(tecnico.equals(texto(datos, "tecnico")), "La tarea " + tarea.codigo() + " ya no es de este técnico.");
+                BigDecimal orden = numero(n, "ordenDiario", true);
+                regla(orden != null, "Indica el orden diario de " + tarea.codigo() + ".");
+                BigDecimal anterior = datos.path("ordenDiario").isNumber() ? datos.path("ordenDiario").decimalValue() : null;
+                if (anterior != null && anterior.compareTo(orden) == 0) {
+                    continue;
+                }
+                datos.put("ordenDiario", orden);
+                bd.jdbc().update("UPDATE timing_tarea SET datos = ?::jsonb, version = version + 1 WHERE id = ?", datos.toString(), id);
+                ObjectNode evento = JsonJs.objetoVacio().put("ordenDiario", orden);
+                evento.put("ordenAnterior", anterior);
+                anotar(acceso, id, "orden-diario", evento);
+                tareas.add(new Tarea(id, tarea.origen(), tarea.codigo(), tarea.version() + 1, datos).json());
+                cambiadas++;
+            }
+            ObjectNode salida = JsonJs.objetoVacio().put("cambiadas", cambiadas);
+            salida.set("tareas", tareas);
+            return salida;
         });
     }
 
@@ -313,6 +368,8 @@ public class TimingPostgres {
                 } else {
                     elegirProyecto(datos, seleccionado);
                 }
+                // Elegido a mano: deja de vincularse automáticamente con el proyecto del Excel.
+                datos.remove(List.of("proyectoOrigen", "cuentaOrigen"));
             }
         }
         if (cuerpo.has("banco")) {
@@ -401,13 +458,19 @@ public class TimingPostgres {
         if (cuerpo.has("diaTrabajo")) {
             datos.put("diaTrabajo", fechaOpcional(cuerpo, "diaTrabajo"));
         }
+        // Orden diario como en el Timing R&T original: un número por técnico, sin día
+        // (0, 1, 2… lo primero; 9 por defecto; 99 genéricas y ausencias).
+        JsonNode ordenAntes = datos.path("ordenDiario").deepCopy();
         copiarNumero(datos, cuerpo, "ordenDiario", true);
+        boolean mismoOrden = !cuerpo.hasNonNull("ordenDiario")
+                || (ordenAntes.isNumber() && ordenAntes.decimalValue().compareTo(cuerpo.path("ordenDiario").decimalValue()) == 0);
         if (cuerpo.has("tecnico") && texto(datos, "tecnico").isEmpty()) {
             datos.remove(List.of("ordenDiario", "diaTrabajo"));
+        } else if (!texto(datos, "tecnico").equals(antes) && mismoOrden) {
+            datos.put("ordenDiario", ORDEN_POR_DEFECTO); // nuevo técnico: al final de su cola
         }
         if (datos.path("ordenDiario").isNumber()) {
-            regla(!texto(datos, "tecnico").isEmpty() && !texto(datos, "diaTrabajo").isEmpty(),
-                    "Indica el técnico y el día antes de fijar el orden diario.");
+            regla(!texto(datos, "tecnico").isEmpty(), "Asigna un técnico antes de fijar el orden diario.");
         }
         for (String campo : List.of("tecnico", "diaTrabajo", "ordenDiario", "prioridad")) {
             evento.set(campo, datos.get(campo));
@@ -440,6 +503,41 @@ public class TimingPostgres {
 
     private BigDecimal horas(long id) {
         return bd.jdbc().queryForObject("SELECT coalesce(sum(horas), 0) FROM timing_avance WHERE tarea = ?", BigDecimal.class, id);
+    }
+
+    /** Nombres y proyectos del Excel sin vincular y correspondencias manuales (coordinador o admin con perfil). */
+    public ObjectNode sinVincular(Acceso acceso) {
+        permiso(acceso.gestiona());
+        return VinculacionTiming.sinVincular(bd);
+    }
+
+    /** Vuelve a buscar correspondencias automáticas para todo lo que sigue sin vincular. */
+    public ObjectNode vincular(Acceso acceso) {
+        permiso(acceso.gestiona());
+        return JsonJs.objetoVacio().put("vinculadas", VinculacionTiming.vincular(bd));
+    }
+
+    public ObjectNode guardarVinculo(Acceso acceso, JsonNode cuerpo) {
+        permiso(acceso.gestiona());
+        return VinculacionTiming.guardarVinculo(bd, cuerpo);
+    }
+
+    public ObjectNode borrarVinculo(Acceso acceso, JsonNode cuerpo) {
+        permiso(acceso.gestiona());
+        return VinculacionTiming.borrarVinculo(bd, cuerpo);
+    }
+
+    /** Al arrancar, vincula lo que haya quedado pendiente (usuarios o proyectos dados de alta por otras vías). */
+    @EventListener(ApplicationReadyEvent.class)
+    public void vincularAlArrancar() {
+        try {
+            int vinculadas = VinculacionTiming.vincular(bd);
+            if (vinculadas > 0) {
+                LOG.info("Timing R&T: {} tareas vinculadas con usuarios o proyectos al arrancar.", vinculadas);
+            }
+        } catch (RuntimeException e) {
+            LOG.warn("Timing R&T: no se ha podido revisar la vinculación al arrancar: {}", e.getMessage());
+        }
     }
 
     public ObjectNode guardarEquipo(Acceso acceso, JsonNode cuerpo) {

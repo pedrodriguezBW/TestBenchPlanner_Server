@@ -138,6 +138,10 @@ public class UsuariosPostgres implements AlmacenUsuarios {
             }
             // Quien sale de la lista pierde su cuenta (hito S3).
             bd.jdbc().update("DELETE FROM credencial c WHERE NOT EXISTS (SELECT 1 FROM usuario u WHERE u.email = c.email)");
+            if (deSesion != null) {
+                // Timing R&T: las tareas importadas del Excel con el nombre de una persona nueva se le asignan solas.
+                r.put("timingVinculadas", VinculacionTiming.vincular(bd));
+            }
             return r;
         });
     }

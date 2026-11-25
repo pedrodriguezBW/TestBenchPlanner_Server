@@ -25,7 +25,7 @@ public record PropiedadesPlanner(
     public PropiedadesPlanner {
         postgresql = postgresql == null
                 ? new PostgreSql(null, null, null, null, null, null, true, null, null, null, false) : postgresql;
-        migracion = migracion == null ? new Migracion(null, null, false, true, null, null, null, null) : migracion;
+        migracion = migracion == null ? new Migracion(null, null, false, true, null, null, null, null, false) : migracion;
         servidor = servidor == null ? new Servidor(false) : servidor;
     }
 
@@ -124,7 +124,9 @@ public record PropiedadesPlanner(
             /* fusión de tres vías: conflictos.json editado con las decisiones (opcional) */
             String resoluciones,
             /* fusión de tres vías: carpeta de trabajo (vacío = junto a la de importar, con fecha) */
-            String salida) {
+            String salida,
+            /* fusión de tres vías: aplicar aunque no se pueda comprobar que «base» es la exportación con la que se cargó la base (D65) */
+            boolean forzarBase) {
 
         public int maxActividadEfectiva() {
             return maxActividad == null ? 5000 : Math.max(0, maxActividad);

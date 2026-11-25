@@ -38,12 +38,26 @@ import java.util.Map;
  *
  * Para resolver conflictos: editar «elegir» en conflictos.json y volver a
  * lanzar con ese fichero como resoluciones.
+ *
+ * D65 (antes de los pasos anteriores y después):
+ *  0. Comprueba que BASE es de verdad la exportación con la que se cargó la base
+ *     (ImportadorDatos.comprobarBase). Con otra carpeta, lo que SharePoint tenía y
+ *     el servidor no se tomaría como «borrado en el servidor» y se perdería: sin
+ *     comprobar, solo se puede SIMULAR (resultado BASE_NO_VERIFICADA al aplicar),
+ *     salvo que se fuerce a propósito.
+ *  2. La fusión no borra usuarios con perfil de Timing o cuenta ni proyectos que
+ *     use Timing (ImportadorDatos.protegidos) y no mezcla semanas de KPI.
+ *  3. El informe avisa de los ensayos que llegan de SharePoint con un proyecto o
+ *     un banco que ya no existe (p. ej. renombrado en el servidor).
+ *  6. Tras aplicar, la base guarda qué exportación de SharePoint se importó: será
+ *     la BASE obligatoria de la siguiente fusión.
  */
 public class ReconciliacionTresVias {
 
     private static final Logger LOG = LoggerFactory.getLogger(ReconciliacionTresVias.class);
 
     public static final String CONFLICTOS = "CONFLICTOS";
+    public static final String BASE_NO_VERIFICADA = "BASE_NO_VERIFICADA";
     static final String CARPETA_ANTES = "postgresql-antes";
     static final String CARPETA_FUSION = "fusion";
     static final String FICHERO_CONFLICTOS = "conflictos.json";
@@ -67,6 +81,12 @@ public class ReconciliacionTresVias {
      * @return informe; «resultado»: IMPORTADO | SIMULADO | RECHAZADO | CONFLICTOS
      */
     public ObjectNode ejecutar(Path base, Path sharepoint, Path resoluciones, Path salida, boolean simular, int maxActividad) {
+        return ejecutar(base, sharepoint, resoluciones, salida, simular, maxActividad, false);
+    }
+
+    /** @param forzarBase true = aplicar aunque no se pueda comprobar que BASE es la exportación con la que se cargó la base */
+    public ObjectNode ejecutar(Path base, Path sharepoint, Path resoluciones, Path salida, boolean simular, int maxActividad,
+                               boolean forzarBase) {
         CarpetaExportacion carpetaBase = new CarpetaExportacion(base);
         carpetaBase.comprobar();
         CarpetaExportacion carpetaSharePoint = new CarpetaExportacion(sharepoint);
@@ -94,13 +114,32 @@ public class ReconciliacionTresVias {
         informe.put("carpetaTrabajo", trabajo.toAbsolutePath().toString());
         informe.set("exportacionSharePoint", manifiestoSharePoint.deepCopy());
 
+        // 0) ¿Es BASE la exportación con la que se cargó la base? (D65)
+        ObjectNode comprobacion = importador.comprobarBase(base);
+        informe.set("comprobacionBase", comprobacion);
+        boolean baseVerificada = comprobacion.path("verificada").asBoolean();
+        if (!baseVerificada) {
+            LOG.warn("Carpeta base sin verificar: {}", comprobacion.path("detalle").asText());
+            if (!simular && !forzarBase) {
+                informe.put("resultado", BASE_NO_VERIFICADA);
+                escribir(trabajo.resolve(FICHERO_INFORME), informe);
+                return informe;
+            }
+        }
+
         // 1) Estado actual de PostgreSQL.
         Path antes = trabajo.resolve(CARPETA_ANTES);
         exportador.exportar(antes, "postgresql", "base de datos del servidor (antes de la reconciliación)", maxActividad);
 
         // 2) Fusión.
-        FusionTresVias.Resultado r = new FusionTresVias(ReconciliacionTresVias::leerTexto, ReconciliacionTresVias::escribirTexto, res)
-                .fusionar(leerCarpeta(carpetaBase), leerCarpeta(carpetaSharePoint), leerCarpeta(new CarpetaExportacion(antes)));
+        Map<String, Object> local = leerCarpeta(new CarpetaExportacion(antes));
+        if (vacia(local.get(FusionTresVias.PLANNER)) && vacia(local.get("usuarios.json"))) {
+            // D65: con la base vacía, todo lo de BASE se tomaría como «borrado en el servidor» y se descartaría.
+            throw new IllegalArgumentException("La base de datos está vacía (sin ensayos ni usuarios): la fusión no sirve para "
+                    + "una primera carga. Para rehacer el servidor, restaura una copia de seguridad (restaurar-copia.cmd).");
+        }
+        FusionTresVias.Resultado r = new FusionTresVias(ReconciliacionTresVias::leerTexto, ReconciliacionTresVias::escribirTexto, res,
+                importador.protegidos()).fusionar(leerCarpeta(carpetaBase), leerCarpeta(carpetaSharePoint), local);
 
         // 3) Ficheros de trabajo.
         Path fusion = trabajo.resolve(CARPETA_FUSION);
@@ -110,6 +149,11 @@ public class ReconciliacionTresVias {
         informe.set("recuentos", JsonJs.mapper().valueToTree(r.recuentos()));
         ArrayNode avisos = informe.putArray("avisos");
         r.avisos().forEach(avisos::add);
+        if (!baseVerificada) {
+            avisos.add("CARPETA BASE SIN VERIFICAR: " + comprobacion.path("detalle").asText());
+        }
+        ArrayNode rotas = informe.putArray("referenciasRotas");
+        referenciasRotas(r.ficheros(), local).forEach(rotas::add);
         long borrados = r.decisiones().stream().filter(d -> !FusionTresVias.CAMPO.equals(d.tipo())).count();
         informe.put("conflictosPendientes", r.pendientes().size());
         informe.put("conflictosResueltos", r.decisiones().stream().filter(d -> FusionTresVias.CAMPO.equals(d.tipo()) && !d.pendiente()).count());
@@ -130,8 +174,91 @@ public class ReconciliacionTresVias {
         ObjectNode importacion = importador.importar(fusion, simular);
         informe.put("resultado", importacion.path("resultado").asText());
         informe.set("importacion", importacion);
+        if ("IMPORTADO".equals(importacion.path("resultado").asText())) {
+            // 6) La próxima fusión tendrá que usar esta exportación de SharePoint como base.
+            importador.registrarExportacion(sharepoint, manifiestoSharePoint);
+        }
         escribir(trabajo.resolve(FICHERO_INFORME), informe);
         return informe;
+    }
+
+    /**
+     * Ensayos fusionados cuyo proyecto o banco no está en la configuración
+     * fusionada y que no estaban así en el servidor (vienen de SharePoint): p. ej.
+     * un proyecto renombrado en el servidor que SharePoint sigue usando.
+     */
+    static List<String> referenciasRotas(Map<String, Object> fusion, Map<String, Object> local) {
+        java.util.Set<String> proyectos = new java.util.HashSet<>();
+        java.util.Set<String> bancos = new java.util.HashSet<>();
+        if (fusion.get("configuracion.json") instanceof Map<?, ?> cfg) {
+            if (cfg.get("projects") instanceof List<?> l) {
+                l.forEach(p -> proyectos.add(String.valueOf(p)));
+            }
+            if (cfg.get("benches") instanceof List<?> l) {
+                l.forEach(b -> {
+                    if (b instanceof Map<?, ?> m && m.get("name") != null) {
+                        bancos.add(String.valueOf(m.get("name")));
+                    }
+                });
+            }
+        }
+        Map<String, Map<?, ?>> datosLocales = new HashMap<>();
+        if (local.get(FusionTresVias.PLANNER) instanceof List<?> filas) {
+            for (Object f : filas) {
+                Map<?, ?> d = datos(f);
+                if (d != null && f instanceof Map<?, ?> m) {
+                    datosLocales.put(String.valueOf(m.get("uid")), d);
+                }
+            }
+        }
+        List<String> salida = new java.util.ArrayList<>();
+        if (fusion.get(FusionTresVias.PLANNER) instanceof List<?> filas) {
+            for (Object f : filas) {
+                Map<?, ?> d = datos(f);
+                if (d == null || !(f instanceof Map<?, ?> m)) {
+                    continue;
+                }
+                Map<?, ?> enServidor = datosLocales.get(String.valueOf(m.get("uid")));
+                String proyecto = texto(d.get("project"));
+                if (!proyecto.isEmpty() && !proyectos.contains(proyecto)
+                        && (enServidor == null || !proyecto.equals(texto(enServidor.get("project"))))) {
+                    salida.add("ensayo " + m.get("uid") + " (" + texto(d.get("_bench")) + "): el proyecto «" + proyecto
+                            + "» no está en el catálogo del servidor (¿renombrado?)");
+                }
+                String banco = texto(d.get("_bench"));
+                if (!banco.isEmpty() && !bancos.contains(banco)
+                        && (enServidor == null || !banco.equals(texto(enServidor.get("_bench"))))) {
+                    salida.add("ensayo " + m.get("uid") + ": el banco «" + banco + "» no existe en el servidor (¿renombrado?)");
+                }
+            }
+        }
+        return salida;
+    }
+
+    private static boolean vacia(Object lista) {
+        return !(lista instanceof List<?> l) || l.isEmpty();
+    }
+
+    private static Map<?, ?> datos(Object fila) {
+        if (!(fila instanceof Map<?, ?> m)) {
+            return null;
+        }
+        Object d = m.get("data");
+        if (d instanceof Map<?, ?> mapa) {
+            return mapa;
+        }
+        if (d instanceof String t) {
+            try {
+                return leerTexto(t) instanceof Map<?, ?> mapa ? mapa : null;
+            } catch (RuntimeException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static String texto(Object o) {
+        return o == null ? "" : String.valueOf(o).trim();
     }
 
     // ---- lectura y escritura ------------------------------------------------------------

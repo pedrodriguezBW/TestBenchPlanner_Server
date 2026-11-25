@@ -13,6 +13,7 @@ import com.borgwarner.tbp.infraestructura.migracion.CarpetaExportacion;
 import com.borgwarner.tbp.infraestructura.migracion.ExportadorDatos;
 import com.borgwarner.tbp.infraestructura.migracion.ReconciliacionTresVias;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -20,11 +21,13 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -200,6 +203,123 @@ class ReconciliacionTresViasPostgresTest {
         assertTrue(informe.path("importacion").path("verificacion").path("ok").asBoolean());
         assertNull(enBase("zz-alta-sharepoint"));
         assertEquals(antes, base.almacenes.ensayos().leer().size());
+    }
+
+    // ---- D65 ---------------------------------------------------------------------------
+
+    @Test
+    void conOtraCarpetaBaseSoloSeSimula() {
+        Path sharepoint = cambiosEnLosDosLados(null);
+        // Una exportación de SharePoint posterior, usada por error como base.
+        SharePointSimulado otra = new SharePointSimulado(tmp.resolve("sp-otra"));
+        cambiar(otra.ensayos, ensayosBase.get(2).uid(), "comments", "otra base");
+        Path baseErronea = tmp.resolve("base-erronea");
+        otra.exportar(baseErronea);
+
+        ObjectNode aplicar = reconciliacion().ejecutar(baseErronea, sharepoint, null, tmp.resolve("t1"), false, 5000);
+        assertEquals(ReconciliacionTresVias.BASE_NO_VERIFICADA, aplicar.path("resultado").asText(), aplicar.toString());
+        assertFalse(aplicar.path("comprobacionBase").path("verificada").asBoolean());
+        assertEquals(1, aplicar.path("comprobacionBase").path("ensayosDistintos").asInt(), aplicar.toString());
+        assertNull(enBase("zz-alta-sharepoint"), "no se toca la base");
+
+        ObjectNode simular = reconciliacion().ejecutar(baseErronea, sharepoint, null, tmp.resolve("t2"), true, 5000);
+        assertEquals("SIMULADO", simular.path("resultado").asText(), simular.toString());
+        assertTrue(simular.path("avisos").toString().contains("CARPETA BASE SIN VERIFICAR"));
+
+        ObjectNode forzado = reconciliacion().ejecutar(baseErronea, sharepoint, null, tmp.resolve("t3"), false, 5000, true);
+        assertEquals("IMPORTADO", forzado.path("resultado").asText(), forzado.toString());
+    }
+
+    @Test
+    void laBaseCorrectaSeVerificaConLaAuditoria() {
+        Path sharepoint = cambiosEnLosDosLados(null);
+        ObjectNode informe = reconciliacion().ejecutar(exportacionBase, sharepoint, null, tmp.resolve("t1"), true, 5000);
+        assertTrue(informe.path("comprobacionBase").path("verificada").asBoolean(), informe.toString());
+        assertEquals(ensayosBase.size(), informe.path("comprobacionBase").path("ensayosIguales").asInt());
+    }
+
+    @Test
+    void laSiguienteFusionUsaLaExportacionImportada() {
+        Path primera = cambiosEnLosDosLados(null);
+        ObjectNode aplicada = reconciliacion().ejecutar(exportacionBase, primera, null, tmp.resolve("t1"), false, 5000);
+        assertEquals("IMPORTADO", aplicada.path("resultado").asText(), aplicada.toString());
+
+        Path ultima = tmp.resolve("sharepoint-final");
+        new SharePointSimulado(tmp.resolve("sp-final")).exportar(ultima);
+        ObjectNode conLaVieja = reconciliacion().ejecutar(exportacionBase, ultima, null, tmp.resolve("t2"), false, 5000);
+        assertEquals(ReconciliacionTresVias.BASE_NO_VERIFICADA, conLaVieja.path("resultado").asText(), conLaVieja.toString());
+
+        ObjectNode conLaBuena = reconciliacion().ejecutar(primera, ultima, null, tmp.resolve("t3"), true, 5000);
+        assertTrue(conLaBuena.path("comprobacionBase").path("verificada").asBoolean(), conLaBuena.toString());
+        assertEquals("SIMULADO", conLaBuena.path("resultado").asText(), conLaBuena.toString());
+    }
+
+    @Test
+    void noBorraUsuariosQueUsaTimingNiCambiaSusTablas() throws IOException {
+        List<String> emails = base.bd.jdbc().queryForList("SELECT email FROM usuario ORDER BY id LIMIT 2", String.class);
+        String conPerfil = emails.get(0);
+        String sinPerfil = emails.get(1);
+        base.bd.jdbc().update("INSERT INTO timing_perfil (email, perfil) VALUES (?, 'tecnico')", conPerfil);
+
+        // SharePoint ya no tiene a ninguno de los dos.
+        SharePointSimulado sp = new SharePointSimulado(tmp.resolve("sp-sin-usuarios"));
+        AlmacenesAuxiliaresLocales.Usuarios usuariosSp = new AlmacenesAuxiliaresLocales.Usuarios(sp.datos,
+                new AlmacenUsuarios.Identidad("", ""), true);
+        ArrayNode quedan = JsonJs.mapper().createArrayNode();
+        usuariosSp.leer().forEach(u -> {
+            if (!emails.contains(u.path("email").asText())) {
+                quedan.add(u);
+            }
+        });
+        ObjectNode lista = JsonJs.objetoVacio();
+        lista.set("users", quedan);
+        usuariosSp.guardar(lista);
+        Path sharepoint = tmp.resolve("sharepoint-sin-usuarios");
+        sp.exportar(sharepoint);
+
+        // Importar tal cual (sin fusión) borraría el perfil de Timing: se deshace todo.
+        ObjectNode directa = base.importador.importar(sharepoint, false);
+        assertEquals("RECHAZADO", directa.path("resultado").asText(), directa.toString());
+        assertTrue(directa.path("verificacion").toString().contains("timing_perfil"), directa.toString());
+        assertEquals(2, base.bd.jdbc().queryForObject("SELECT count(*) FROM usuario WHERE email IN (?, ?)", Integer.class,
+                conPerfil, sinPerfil));
+
+        // Fusión pidiendo borrar a los dos: solo se borra el que no usa Timing.
+        Path resoluciones = tmp.resolve("resoluciones.json");
+        ObjectNode raiz = JsonJs.objetoVacio().put("porDefecto", "");
+        ArrayNode decisiones = raiz.putArray("decisiones");
+        for (String e : emails) {
+            decisiones.addObject().put("id", "usuarios.json|email=" + e + "|borrado-en-sharepoint").put("elegir", "borrar");
+        }
+        JsonJs.mapper().writeValue(resoluciones.toFile(), raiz);
+        ObjectNode informe = reconciliacion().ejecutar(exportacionBase, sharepoint, resoluciones, tmp.resolve("trabajo"), false, 5000);
+        assertEquals("IMPORTADO", informe.path("resultado").asText(), informe.toString());
+        assertEquals(1, base.bd.jdbc().queryForObject("SELECT count(*) FROM usuario WHERE email = ?", Integer.class, conPerfil));
+        assertEquals(0, base.bd.jdbc().queryForObject("SELECT count(*) FROM usuario WHERE email = ?", Integer.class, sinPerfil));
+        assertEquals(1, base.bd.jdbc().queryForObject("SELECT count(*) FROM timing_perfil WHERE email = ?", Integer.class, conPerfil));
+        assertTrue(informe.path("avisos").toString().contains("no se borra"), informe.toString());
+    }
+
+    private static ObjectNode fotoKpi(int benches, int delayed) {
+        return JsonJs.objetoVacio().put("year", 2030).put("cw", 5).put("org", "THERMAL").put("date", "2030-01-30")
+                .put("benches", benches).put("delayed", delayed);
+    }
+
+    @Test
+    void unaSemanaDeKpiNoSeMezcla() {
+        SharePointSimulado sp = new SharePointSimulado(tmp.resolve("sp-kpi"));
+        new AlmacenesAuxiliaresLocales.HistoricoKpi(sp.datos).guardarFotos(List.of(fotoKpi(5, 1)));
+        Path sharepoint = tmp.resolve("sharepoint-kpi");
+        sp.exportar(sharepoint);
+        base.almacenes.kpi().guardarFotos(List.of(fotoKpi(7, 0)));
+
+        ObjectNode informe = reconciliacion().ejecutar(exportacionBase, sharepoint, null, tmp.resolve("trabajo"), false, 5000);
+        assertEquals("IMPORTADO", informe.path("resultado").asText(), informe.toString());
+        JsonNode fila = JsonJs.leerObjeto(base.bd.jdbc().queryForObject(
+                "SELECT fila_json FROM kpi_semana WHERE anio = 2030 AND cw = 5 AND org = 'THERMAL'", String.class));
+        assertEquals(7, fila.path("Benches").asInt(), "la semana del servidor, entera");
+        assertEquals(0, fila.path("DelayedDeclared").asInt(), "sin el retraso de la foto de SharePoint");
+        assertTrue(informe.path("avisos").toString().contains("se conserva entera la del servidor"), informe.toString());
     }
 
     @Test

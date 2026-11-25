@@ -53,8 +53,37 @@ public final class FilaKpi {
         for (String columna : new String[]{"ReasonResources", "ReasonParts", "ReasonBreakdown", "ReasonTestDrop", "ReasonPriority", "ReasonOther"}) {
             fila.set(columna, numero(motivos.get(columna)));
         }
-        fila.put("KPIJson", JsonPython.escribir(s));
+        fila.put("KPIJson", JsonPython.escribir(sinOrigen(s)));
         return fila;
+    }
+
+    /** Claves de la foto que dicen quién y cuándo la tomó (no forman parte del KPIJson de la 4.9.4). */
+    public static final String ORIGEN = "snapSource";
+    public static final String INSTANTE = "snapAt";
+
+    private static JsonNode sinOrigen(JsonNode s) {
+        if (!(s instanceof ObjectNode o) || (!o.has(ORIGEN) && !o.has(INSTANTE))) {
+            return s;
+        }
+        ObjectNode copia = o.deepCopy();
+        copia.remove(ORIGEN);
+        copia.remove(INSTANTE);
+        return copia;
+    }
+
+    /**
+     * Almacenes local y PostgreSQL (D64): guardan además quién tomó la foto
+     * (manual, auto, export) y el instante exacto, para saber en KPI History si
+     * la semana quedó cerrada el domingo o es provisional. SharePoint no tiene
+     * esas columnas y no las recibe.
+     */
+    public static void anadirOrigen(ObjectNode fila, JsonNode foto) {
+        if (foto.hasNonNull(ORIGEN)) {
+            fila.put("SnapSource", foto.get(ORIGEN).asText());
+        }
+        if (foto.hasNonNull(INSTANTE)) {
+            fila.put("SnapAt", foto.get(INSTANTE).asText());
+        }
     }
 
     /** _num del backend: '' o null -> null; texto numérico -> número. */

@@ -66,15 +66,24 @@ public class CatalogosPostgres implements AlmacenCatalogos {
         ArrayNode proyectos = salida.putArray("projects");
         ObjectNode ordenes = salida.putObject("projectOrders");
         ObjectNode numeros = modoServidor ? salida.putObject("projectNumbers") : null;
-        bd.jdbc().query("SELECT titulo, orden_facturacion, numero_proyecto FROM proyecto" + ORDEN_SEQ, (java.sql.ResultSet rs) -> {
+        // Servidor: número y nombre por separado para Configuración › Projects (la clave pública sigue siendo la etiqueta).
+        ArrayNode fichas = modoServidor ? salida.putArray("projectItems") : null;
+        bd.jdbc().query("SELECT titulo, orden_facturacion, numero_proyecto, id FROM proyecto" + ORDEN_SEQ, (java.sql.ResultSet rs) -> {
             while (rs.next()) {
-                proyectos.add(rs.getString(1));
+                String nombre = rs.getString(1);
+                String numero = rs.getString(3) == null ? "" : rs.getString(3);
+                String etiqueta = NombresProyecto.etiqueta(nombre, numero);
+                proyectos.add(etiqueta);
                 String orden = rs.getString(2) == null ? "" : rs.getString(2).trim();
                 if (!orden.isEmpty()) {
-                    ordenes.put(rs.getString(1), orden);
+                    ordenes.put(etiqueta, orden);
                 }
-                if (numeros != null && rs.getString(3) != null) {
-                    numeros.put(rs.getString(1), rs.getString(3));
+                if (numeros != null && !numero.isEmpty()) {
+                    numeros.put(etiqueta, numero);
+                }
+                if (fichas != null) {
+                    fichas.addObject().put("id", rs.getLong(4)).put("label", etiqueta).put("name", nombre).put("number", numero)
+                            .put("numberInName", NombresProyecto.nombreConNumero(nombre));
                 }
             }
             return null;
@@ -116,19 +125,177 @@ public class CatalogosPostgres implements AlmacenCatalogos {
 
     @Override
     public void guardarNumeroProyecto(String proyecto, String numero, String anterior) {
-        if (!numero.isEmpty() && !numero.matches("[0-9]{1,40}")) {
+        List<Map<String, Object>> filas = bd.jdbc().queryForList("SELECT id, titulo, coalesce(numero_proyecto, '') AS numero FROM proyecto");
+        for (Map<String, Object> f : filas) {
+            String nombre = (String) f.get("titulo");
+            if (NombresProyecto.etiqueta(nombre, (String) f.get("numero")).equals(proyecto)) {
+                editarProyecto(((Number) f.get("id")).longValue(), nombre, numero, nombre, anterior);
+                return;
+            }
+        }
+        throw new ReglaNoCumplida("El proyecto ha cambiado. Recarga la lista antes de guardar.");
+    }
+
+    /**
+     * Cambia el nombre y/o el número de un proyecto sin borrarlo (conserva su id,
+     * su orden de facturación y su posición). Si cambia la etiqueta «número -
+     * nombre», se actualiza en todos los ensayos (abiertos y cerrados) que la
+     * usan; en Timing R&T, las tareas de ese proyecto y las correspondencias
+     * manuales que apuntan a él. Todo en una transacción y en la auditoría.
+     */
+    @Override
+    public ObjectNode editarProyecto(long id, String nombre, String numero, String anteriorNombre, String anteriorNumero) {
+        String nuevoNombre = nombre == null ? "" : nombre.strip();
+        String nuevoNumero = NombresProyecto.numeroLargo(numero);
+        if (nuevoNombre.isEmpty()) {
+            throw new ReglaNoCumplida("El proyecto necesita un nombre.");
+        }
+        if (!nuevoNumero.isEmpty() && !nuevoNumero.matches("[0-9]{1,40}")) {
             throw new ReglaNoCumplida("Introduce un número de proyecto de hasta 40 dígitos.");
         }
-        bd.enTransaccion(() -> {
+        if (!nuevoNombre.equals(anteriorNombre) && NombresProyecto.tieneFormaNumeroNombre(nuevoNombre)) {
+            throw new ReglaNoCumplida("Escribe el número en la columna Project Number, no en el nombre.");
+        }
+        return bd.enTransaccion(() -> {
             bd.bloquear(CERROJO);
-            int cambios = bd.jdbc().update("UPDATE proyecto SET numero_proyecto = NULLIF(?, '') "
-                    + "WHERE titulo = ? AND coalesce(numero_proyecto, '') = ?", numero, proyecto, anterior);
-            if (cambios == 0) {
+            List<Map<String, Object>> actual = bd.jdbc().queryForList(
+                    "SELECT titulo, coalesce(numero_proyecto, '') AS numero FROM proyecto WHERE id = ? FOR UPDATE", id);
+            if (actual.isEmpty()) {
+                throw new ReglaNoCumplida("El proyecto ya no existe. Recarga la lista.");
+            }
+            String viejoNombre = (String) actual.get(0).get("titulo");
+            String viejoNumero = (String) actual.get(0).get("numero");
+            if (!viejoNombre.equals(anteriorNombre) || !viejoNumero.equals(anteriorNumero == null ? "" : anteriorNumero.strip())) {
                 throw new ReglaNoCumplida("El proyecto ha cambiado. Recarga la lista antes de guardar.");
             }
-            Auditoria.anotar(bd, bd.actor(), "proyecto", proyecto, Auditoria.MODIFICACION, anterior, numero);
+            ObjectNode resultado = JsonJs.objetoVacio().put("ok", true);
+            String viejaEtiqueta = NombresProyecto.etiqueta(viejoNombre, viejoNumero);
+            String nuevaEtiqueta = NombresProyecto.etiqueta(nuevoNombre, nuevoNumero);
+            resultado.put("label", nuevaEtiqueta).put("name", nuevoNombre).put("number", nuevoNumero);
+            if (viejoNombre.equals(nuevoNombre) && viejoNumero.equals(nuevoNumero)) {
+                return resultado.put("tests", 0).put("timingTasks", 0);
+            }
+            for (Map<String, Object> otro : bd.jdbc().queryForList(
+                    "SELECT titulo, coalesce(numero_proyecto, '') AS numero FROM proyecto WHERE id <> ?", id)) {
+                String suNombre = (String) otro.get("titulo");
+                if (suNombre.equals(nuevoNombre)) {
+                    throw new ReglaNoCumplida("Ya hay otro proyecto llamado «" + nuevoNombre + "».");
+                }
+                if (NombresProyecto.etiqueta(suNombre, (String) otro.get("numero")).equals(nuevaEtiqueta)) {
+                    throw new ReglaNoCumplida("Ya hay otro proyecto «" + nuevaEtiqueta + "».");
+                }
+            }
+            bd.jdbc().update("UPDATE proyecto SET titulo = ?, numero_proyecto = NULLIF(?, '') WHERE id = ?",
+                    nuevoNombre, nuevoNumero, id);
+            var actor = bd.actor();
+            Auditoria.anotar(bd, actor, "proyecto", nuevaEtiqueta, Auditoria.MODIFICACION,
+                    JsonJs.objetoVacio().put("titulo", viejoNombre).put("numero_proyecto", viejoNumero).toString(),
+                    JsonJs.objetoVacio().put("titulo", nuevoNombre).put("numero_proyecto", nuevoNumero).toString());
+            int ensayos = viejaEtiqueta.equals(nuevaEtiqueta) ? 0 : renombrarEnEnsayos(viejaEtiqueta, nuevaEtiqueta, actor);
+            resultado.put("tests", ensayos);
+            if (modoServidor) {
+                resultado.put("timingTasks", VinculacionTiming.renombrarProyecto(bd, id, viejoNombre, nuevoNombre, nuevoNumero));
+                VinculacionTiming.vincular(bd);
+            } else {
+                resultado.put("timingTasks", 0);
+            }
+            return resultado;
+        });
+    }
+
+    /** Cambia el proyecto de los ensayos que usan la etiqueta anterior. Devuelve cuántos. */
+    private int renombrarEnEnsayos(String anterior, String nueva, com.borgwarner.tbp.aplicacion.puertos.AlmacenUsuarios.Identidad actor) {
+        List<Map<String, Object>> filas = bd.jdbc().queryForList(
+                "SELECT uid, data_json FROM ensayo WHERE proyecto = ? ORDER BY uid FOR UPDATE", anterior.strip());
+        int cambiados = 0;
+        for (Map<String, Object> fila : filas) {
+            String uid = (String) fila.get("uid");
+            String texto = (String) fila.get("data_json");
+            String nuevo = conProyecto(texto, nueva);
+            if (nuevo == null || nuevo.equals(texto)) {
+                continue;
+            }
+            List<Object> valores = new ArrayList<>();
+            valores.add(nuevo);
+            valores.addAll(java.util.Arrays.asList(ColumnasEnsayo.de(nuevo).valores()));
+            valores.add(actor == null ? null : actor.email());
+            valores.add(uid);
+            bd.jdbc().update("UPDATE ensayo SET data_json = ?, version = version + 1, " + ColumnasEnsayo.ASIGNACIONES
+                    + ", actualizado_en = now(), actualizado_por = ? WHERE uid = ?", valores.toArray());
+            Auditoria.anotar(bd, actor, "ensayo", uid, Auditoria.MODIFICACION, texto, nuevo);
+            cambiados++;
+        }
+        return cambiados;
+    }
+
+    /**
+     * El DataJson con otro «project». Se cambia solo ese texto para conservar el
+     * resto byte a byte; si no se encuentra una única vez, se reescribe el JSON.
+     */
+    static String conProyecto(String texto, String proyecto) {
+        ObjectNode e = JsonJs.leerObjeto(texto);
+        if (e == null || !e.path("project").isTextual()) {
+            return null;
+        }
+        String antes = "\"project\":" + JsonJs.escribir(e.get("project"));
+        int primera = texto.indexOf(antes);
+        if (primera >= 0 && primera == texto.lastIndexOf(antes)) {
+            return texto.substring(0, primera) + "\"project\":" + JsonJs.escribir(com.fasterxml.jackson.databind.node.TextNode.valueOf(proyecto))
+                    + texto.substring(primera + antes.length());
+        }
+        e.put("project", proyecto);
+        return JsonJs.escribir(e);
+    }
+
+    /**
+     * Filas de la tabla proyecto para una lista de etiquetas «número - nombre»:
+     * las que ya existen se identifican por su nombre (no se toca su número); las
+     * nuevas se separan en número (formato largo) y nombre. Cada fila lleva
+     * además «etiqueta» (la recibida), que el llamante debe quitar.
+     */
+    private List<Map<String, Object>> filasProyectos(JsonNode lista) {
+        Map<String, String> nombrePorEtiqueta = new LinkedHashMap<>();
+        java.util.Set<String> nombres = new java.util.HashSet<>();
+        bd.jdbc().query("SELECT titulo, coalesce(numero_proyecto, '') FROM proyecto", (java.sql.ResultSet rs) -> {
+            while (rs.next()) {
+                nombrePorEtiqueta.put(NombresProyecto.etiqueta(rs.getString(1), rs.getString(2)), rs.getString(1));
+                nombres.add(rs.getString(1));
+            }
             return null;
         });
+        List<Map<String, Object>> filas = new ArrayList<>();
+        java.util.Set<String> usados = new java.util.HashSet<>();
+        int i = 0;
+        for (JsonNode n : lista) {
+            i++;
+            String etiqueta = n.asText("");
+            if (etiqueta.isEmpty()) {
+                continue;
+            }
+            Map<String, Object> f = new LinkedHashMap<>();
+            String existente = nombrePorEtiqueta.get(etiqueta);
+            if (existente != null) {
+                f.put("titulo", existente);
+            } else {
+                NombresProyecto.Partes partes = NombresProyecto.separarNuevo(etiqueta);
+                boolean libre = !partes.numero().isEmpty() && !nombres.contains(partes.nombre()) && !usados.contains(partes.nombre())
+                        && !nombrePorEtiqueta.containsKey(partes.nombre());
+                if (libre) {
+                    f.put("titulo", partes.nombre());
+                    f.put("numero_proyecto", partes.numero());
+                } else {
+                    // Sin número, o el nombre ya lo tiene otro proyecto: se guarda tal cual.
+                    f.put("titulo", etiqueta);
+                }
+            }
+            if (!usados.add((String) f.get("titulo"))) {
+                continue;
+            }
+            f.put("seq", (double) i);
+            f.put("etiqueta", etiqueta);
+            filas.add(f);
+        }
+        return filas;
     }
 
     /** Valor de la columna Area: el código del área de serie; vacío para Bancos Térmicos (como en SharePoint). */
@@ -182,24 +349,20 @@ public class CatalogosPostgres implements AlmacenCatalogos {
 
             JsonNode ordenes = catalogos.get("projectOrders");
             boolean conOrdenes = ordenes != null && ordenes.isObject();
-            List<Map<String, Object>> proyectos = new ArrayList<>();
-            int i = 0;
-            for (JsonNode n : catalogos.path("projects")) {
-                i++;
-                if (n.asText("").isEmpty()) {
-                    continue;
-                }
-                Map<String, Object> f = new LinkedHashMap<>();
-                f.put("titulo", n.asText());
-                f.put("seq", (double) i);
+            List<Map<String, Object>> proyectos = filasProyectos(catalogos.path("projects"));
+            for (Map<String, Object> f : proyectos) {
+                String etiqueta = (String) f.remove("etiqueta");
                 if (conOrdenes) {
-                    String orden = ordenes.path(n.asText()).asText("").trim();
+                    String orden = ordenes.path(etiqueta).asText("").trim();
                     f.put("orden_facturacion", orden.isEmpty() ? null : orden);
                 }
-                proyectos.add(f);
             }
-            resultado.set("projects", Reconciliador.reconciliar(bd, "proyecto", "titulo", List.of("seq", "orden_facturacion"),
-                    proyectos, true, "proyecto", actor, null).json());
+            resultado.set("projects", Reconciliador.reconciliar(bd, "proyecto", "titulo",
+                    List.of("seq", "orden_facturacion", "numero_proyecto"), proyectos, true, "proyecto", actor, null).json());
+            if (modoServidor) {
+                // Timing R&T: las tareas del Excel con este proyecto (nombre y número) se vinculan solas.
+                resultado.put("timingVinculadas", VinculacionTiming.vincular(bd));
+            }
 
             List<Map<String, Object>> bancos = new ArrayList<>();
             for (JsonNode b : catalogos.path("benches")) {

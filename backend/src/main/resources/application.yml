@@ -61,6 +61,12 @@ planner:
     # Solo pruebas y laboratorio: /api/v1/local/reinicio vacía la base y carga un escenario.
     reinicio-pruebas: false
 
+  # Foto semanal automática de KPI (D64, solo con PostgreSQL): cada noche se vuelve a
+  # guardar la foto de la semana en curso; la del domingo la deja cerrada.
+  # Cron de Spring (segundo minuto hora día mes día-semana), hora de Madrid. «-» = desactivada.
+  kpi:
+    foto-automatica: "0 55 23 * * *"
+
   # Modo servidor (hito S2): se activa con el perfil «servidor» (application-servidor.yml).
   servidor:
     activo: false
@@ -75,7 +81,8 @@ planner:
 
   # Migración de datos en dos pasos (docs/10-servidor-postgresql.md, apartado 5).
   #   exportar: carpeta destino; se lee el almacén configurado (SharePoint) en SOLO LECTURA.
-  #   importar: carpeta de una exportación; se carga en PostgreSQL (repetible, sin duplicar).
+  #   importar: exportación de SharePoint que se FUSIONA en PostgreSQL con la base común
+  #             (base). Desde D65 no hay importación sin base: borraba lo hecho en el servidor.
   migracion:
     exportar: ""
     importar: ""
@@ -86,6 +93,7 @@ planner:
     # en PostgreSQL y añade lo hecho en SharePoint desde la exportación «base».
     base: ""                  # exportación con la que se cargó la base (estado común)
     resoluciones: ""          # conflictos.json editado (opcional)
+    forzar-base: false        # aplicar aunque no se pueda comprobar la carpeta base (D65; solo a propósito)
     salida: ""                # carpeta de trabajo (vacío = junto a la de SharePoint, con fecha)
 
 spring:

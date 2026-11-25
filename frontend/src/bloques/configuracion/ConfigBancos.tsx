@@ -55,7 +55,7 @@ export function ConfigBancos() {
   const [nuevaCategoria, setNuevaCategoria] = useState<Record<string, string>>({});
   const [colorCategoria, setColorCategoria] = useState<Record<string, string>>({});
   const [nuevos, setNuevos] = useState<Record<string, string>>({});
-  const [version, setVersion] = useState(0); // vuelve a pintar las cajas si un cambio no se aplica
+  const [version, setVersion] = useState(0); // vuelve a pintar las cajas de texto si un cambio no se aplica (solo las cajas: remontar los bloques enteros hacía saltar la página arriba)
   // Categorías recién creadas sin bancos: como en la 4.9.4, solo existen en esta
   // pantalla hasta que se les añade un banco (la lista compartida es de bancos).
   const [vacias, setVacias] = useState<Categoria[]>([]);
@@ -246,7 +246,7 @@ export function ConfigBancos() {
         const conOrg = organizacionFija === null;
         const primera = ai === 0; // la caja «New category» de la primera área conserva los id de la 4.9.4
         return (
-          <div className="cfg-area" key={area + version} data-area={area} {...(primera ? {} : { 'data-solo-nueva': '' })}>
+          <div className="cfg-area" key={area} data-area={area} {...(primera ? {} : { 'data-solo-nueva': '' })}>
             <div className="area-head" data-solo-nueva="">
               <span style={{ minWidth: 240, fontWeight: 800, fontSize: 15 }} data-nombre-area={area}>{nombres[area] ?? area}</span>
               <span className="hint" style={{ margin: 0 }}>
@@ -264,11 +264,11 @@ export function ConfigBancos() {
             </div>
             {!enArea.length && <div className="area-empty" data-solo-nueva="">No categories in this area yet.</div>}
             {enArea.map(({ g, gi }, indiceEnArea) => (
-            <div className="cfg-cat" key={g.key + version} data-categoria={g.name}>
+            <div className="cfg-cat" key={g.key} data-categoria={g.name}>
               <div className="catrow">
-                <input type="color" defaultValue={g.dot} title="Category color" disabled={bloqueado}
+                <input type="color" key={`color|${g.dot}|${version}`} defaultValue={g.dot} title="Category color" disabled={bloqueado}
                   onChange={(e) => cambiarCategoria(gi, { dot: e.target.value })} />
-                <input className="f" defaultValue={g.name} style={{ minWidth: 260, fontWeight: 700 }} disabled={bloqueado}
+                <input className="f" key={`nombre|${g.name}|${version}`} defaultValue={g.name} style={{ minWidth: 260, fontWeight: 700 }} disabled={bloqueado}
                   onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== g.name) cambiarCategoria(gi, { name: v }); }}
                   onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
                 <span className="hint" style={{ margin: 0 }}>{g.benches.length} bench(es)</span>
@@ -288,7 +288,7 @@ export function ConfigBancos() {
                   {g.benches.map((b, bi) => (
                     <tr key={b.name} data-banco={b.name}>
                       <td style={{ color: 'var(--muted)' }}>{bi + 1}</td>
-                      <td><input className="f" defaultValue={b.name} style={{ minWidth: 200 }} disabled={bloqueado}
+                      <td><input className="f" key={`banco|${b.name}|${version}`} defaultValue={b.name} style={{ minWidth: 200 }} disabled={bloqueado}
                         onBlur={(e) => renombrarBanco(gi, bi, e.target.value)}
                         onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} /></td>
                       {conOrg && (

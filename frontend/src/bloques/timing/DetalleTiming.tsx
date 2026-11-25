@@ -7,8 +7,11 @@ const ESTADOS = { pendiente: 'Pendiente', 'en-proceso': 'En proceso', cerrada: '
 const ACCIONES: Record<string, string> = {
   creada: 'Creada', duplicada: 'Duplicada', editar: 'Datos editados', disponibilidad: 'Disponibilidad actualizada',
   planificar: 'Planificación actualizada', estado: 'Estado actualizado', iniciar: 'Iniciada', avance: 'Avance registrado',
-  cerrar: 'Cerrada', reabrir: 'Reabierta', cancelar: 'Cancelada',
+  cerrar: 'Cerrada', reabrir: 'Reabierta', cancelar: 'Cancelada', vinculada: 'Vinculación con TestBenchPlanner',
+  'proyecto-renombrado': 'Proyecto cambiado en TestBenchPlanner',
+  'orden-diario': 'Orden diario cambiado',
 };
+const CAMPOS_VINCULO: Record<string, string> = { responsable: 'Responsable', tecnico: 'Técnico', proyecto: 'Proyecto' };
 const TITULOS_FORMULARIO = {
   planificar: 'Planificar tarea', avance: 'Registrar avance', cerrar: 'Cerrar tarea', reabrir: 'Reabrir tarea',
 };
@@ -75,7 +78,7 @@ export function EditorTarea({ tarea, opciones, responsableEditable, ocupado, gua
           <option value="">{tarea?.proyecto && !tarea.proyectoId ? tarea.proyecto + ' (sin conciliar)' : 'Sin determinar'}</option>
           {tarea?.proyectoId && !opciones.proyectos.some((p) => p.id === tarea.proyectoId) &&
             <option value={tarea.proyectoId}>{tarea.proyecto} (archivado)</option>}
-          {opciones.proyectos.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          {opciones.proyectos.map((p) => <option key={p.id} value={p.id}>{p.etiqueta || p.nombre}</option>)}
         </select>
       </Campo>
       {(proyecto || cuenta) && <Campo nombre="Cuenta del proyecto"><output>{cuenta || 'Sin cuenta'}</output></Campo>}
@@ -138,7 +141,7 @@ export function DetalleTiming({ tarea, sesion, opciones, ocupado, operar, volver
     const d = new FormData(e.currentTarget);
     switch (accion) {
       case 'planificar':
-        ejecutar(accion, { tecnico: texto(d, 'tecnico'), diaTrabajo: texto(d, 'diaTrabajo'), prioridad: numero(d, 'prioridad'), ordenDiario: numero(d, 'ordenDiario') });
+        ejecutar(accion, { tecnico: texto(d, 'tecnico'), prioridad: numero(d, 'prioridad'), ordenDiario: numero(d, 'ordenDiario') });
         break;
       case 'avance':
         ejecutar(accion, { fecha: texto(d, 'fecha'), horas: numero(d, 'horas'), pendientes: numero(d, 'pendientes'), comentario: texto(d, 'comentario') });
@@ -209,9 +212,8 @@ export function DetalleTiming({ tarea, sesion, opciones, ocupado, operar, volver
               {opciones.personas.filter((p) => p.tecnico).map((p) => <option key={p.email} value={p.email}>{p.nombre}</option>)}
             </select>
           </Campo>
-          <Campo nombre="Día de trabajo"><input className="f" name="diaTrabajo" type="date" defaultValue={tarea.diaTrabajo ?? ''} /></Campo>
           <Campo nombre="Prioridad general"><input className="f" name="prioridad" type="number" step="any" defaultValue={tarea.prioridad ?? ''} /></Campo>
-          <Campo nombre="Orden diario"><input className="f" name="ordenDiario" type="number" step="any" defaultValue={tarea.ordenDiario ?? ''} /></Campo>
+          <Campo nombre="Orden diario (0-8 primero · 9 cola · 99 al final)"><input className="f" name="ordenDiario" type="number" step="any" defaultValue={tarea.ordenDiario ?? ''} /></Campo>
         </div>}
         {formulario === 'avance' && <div className="timing-form-grid">
           <Campo nombre="Fecha"><input className="f" name="fecha" required type="date" max={opciones.hoy} defaultValue={opciones.hoy} /></Campo>
@@ -234,7 +236,6 @@ export function DetalleTiming({ tarea, sesion, opciones, ocupado, operar, volver
           <Dato nombre="Proyecto" valor={tarea.proyecto} />
           <Dato nombre="Técnico" valor={tarea.tecnicoNombre || tarea.tecnicoOrigen || tarea.tecnico || (coordina && abierta ? 'Sin asignar' : '')} />
           <Dato nombre="Banco" valor={[tarea.banco, tarea.camara].filter(Boolean).join(' · ')} />
-          <Dato nombre="Día de trabajo" valor={tarea.diaTrabajo} />
           <Dato nombre={tarea.estado === 'cerrada' ? 'Horas reales' : 'Horas estimadas'} valor={tarea.estado === 'cerrada' ? tarea.horasReales : tarea.horasEstimadas} />
           {tarea.estado !== 'cerrada' && <Dato nombre="Horas registradas" valor={tarea.horasRegistradas || null} />}
         </dl>
@@ -271,6 +272,10 @@ export function DetalleTiming({ tarea, sesion, opciones, ocupado, operar, volver
       <summary>Historial de cambios</summary>
       <ul className="timing-eventos">{tarea.historial.map((h, i) => <li key={i}>
         <b>{ACCIONES[h.accion] || h.accion} · {h.autor}</b><span>{new Date(h.fecha).toLocaleString('es-ES')}</span>
+        {Array.isArray(h.datos.vinculos) && (h.datos.vinculos as { campo: string; origen: string; destino: string; manual?: boolean }[])
+          .map((v, j) => <p key={j}>{CAMPOS_VINCULO[v.campo] ?? v.campo}: {v.origen} → {v.destino ? opciones.personas.find((p) => p.email === v.destino)?.nombre ?? v.destino : 'sin vincular'}
+            {v.manual ? ' (manual)' : ''}</p>)}
+        {h.accion === 'orden-diario' && <p>{String(h.datos.ordenAnterior ?? '—')} → {String(h.datos.ordenDiario ?? '—')}</p>}
         {typeof h.datos.horasReales === 'number' && <p>{h.datos.horasReales} h reales</p>}
         {typeof h.datos.motivo === 'string' && h.datos.motivo && <p>{h.datos.motivo}</p>}
         {typeof h.datos.comentario === 'string' && h.datos.comentario && <p>{h.datos.comentario}</p>}

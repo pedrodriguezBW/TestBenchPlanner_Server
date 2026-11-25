@@ -1,7 +1,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enlaceTiming, leerRutaTiming, ordenarCola, ordenarTareas, sugerenciasTiming, vistaInicialTiming, vistasTiming } from '../target-test/bloques/timing/modelo.js';
+import { enlaceTiming, grupoOrden, leerRutaTiming, nuevoOrdenDiario, ordenarCola, ordenarTareas, sugerenciasTiming, vistaInicialTiming, vistasTiming } from '../target-test/bloques/timing/modelo.js';
 
 test('abre enlaces de Timing sin capturar la navegación histórica del Planner', () => {
   assert.equal(leerRutaTiming('#/timing'), null);
@@ -21,16 +21,25 @@ test('oculta Timing sin un perfil y elige la vista principal por perfil', () => 
   assert.equal(vistaInicialTiming([...tecnico, 'planificacion']), 'planificacion');
 });
 
-test('la cola personal prioriza el orden del día, luego los pendientes sin fecha y otras fechas', () => {
-  const dia = '2026-11-23';
+test('ordena la cola como Timing R&T: orden del día, cola (9) y genéricas (99), después prioridad', () => {
   const tareas = [
-    { id: 1, diaTrabajo: dia, ordenDiario: 5, prioridad: -1 },
-    { id: 2, diaTrabajo: dia, ordenDiario: 1, prioridad: 2 },
-    { id: 3, prioridad: -2 },
-    { id: 4, diaTrabajo: '2026-11-24', ordenDiario: -10 },
-    { id: 5, diaTrabajo: dia, ordenDiario: 1, prioridad: 2 },
+    { id: 1, ordenDiario: 9, prioridad: 2 },
+    { id: 2, ordenDiario: 1, prioridad: 50 },
+    { id: 3, ordenDiario: 99, prioridad: 999 },
+    { id: 4, ordenDiario: 0, prioridad: 100 },
+    { id: 5, prioridad: 1 },
+    { id: 6, ordenDiario: -0.5 },
   ];
-  assert.deepEqual(ordenarCola(tareas, dia).map((t) => t.id), [2, 5, 1, 3, 4]);
+  assert.deepEqual(ordenarCola(tareas).map((t) => t.id), [6, 4, 2, 5, 1, 3]);
+  assert.deepEqual(tareas.map(grupoOrden), ['cola', 'dia', 'final', 'dia', 'cola', 'dia']);
+});
+
+test('el panel del coordinador numera el día y solo envía lo que cambia', () => {
+  const a = { id: 1, ordenDiario: 1 }, b = { id: 2, ordenDiario: 9 }, c = { id: 3, ordenDiario: 0 }, d = { id: 4, ordenDiario: 99 }, e = { id: 5, ordenDiario: 3 };
+  const cambios = nuevoOrdenDiario({ dia: [a, b], cola: [c, { id: 6, ordenDiario: 9.5 }], final: [d, e] });
+  assert.deepEqual(cambios.map((x) => [x.tarea.id, x.ordenDiario]), [[2, 2], [3, 9], [5, 99]]);
+  // Sin mover nada no hay cambios, aunque el día empiece en 0.
+  assert.deepEqual(nuevoOrdenDiario({ dia: [c, a], cola: [b], final: [d] }), []);
 });
 
 test('ordena los números de proyecto y deja al final las tareas sin número', () => {

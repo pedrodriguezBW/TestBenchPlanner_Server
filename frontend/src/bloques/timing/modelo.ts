@@ -2,13 +2,13 @@
 import type { PerfilTiming, Sesion } from '../../api/tipos';
 
 export const CAMARA_CLIMATICA = 'Cámara Climática';
-export type VistaTiming = 'solicitudes' | 'cola' | 'planificacion' | 'historico' | 'configuracion';
+export type VistaTiming = 'solicitudes' | 'cola' | 'planificacion' | 'orden' | 'historico' | 'configuracion';
 export type AccionTiming = 'editar' | 'disponibilidad' | 'estado' | 'planificar' | 'iniciar' | 'avance' | 'cerrar' | 'reabrir' | 'cancelar' | 'duplicar';
 export type ColumnaTiming = 'prioridad' | 'ordenDiario' | 'cuenta' | 'tecnico' | 'responsable' | 'estado';
 export type OrdenTiming = { columna: ColumnaTiming; descendente: boolean };
 
 export const VISTAS_TIMING: Record<VistaTiming, string> = {
-  solicitudes: 'Mis solicitudes', cola: 'Mi cola', planificacion: 'Planificación', historico: 'Histórico', configuracion: 'Configuración',
+  solicitudes: 'Mis solicitudes', cola: 'Mi cola', planificacion: 'Planificación', orden: 'Orden diario', historico: 'Histórico', configuracion: 'Configuración',
 };
 
 export interface TareaTiming {
@@ -61,7 +61,8 @@ export interface EquipoTiming {
 export interface OpcionesTiming {
   hoy: string;
   tipos: string[];
-  proyectos: { id: number; nombre: string; cuenta: string | null }[];
+  /** etiqueta: «número - nombre», como se ve en TestBenchPlanner. */
+  proyectos: { id: number; nombre: string; cuenta: string | null; etiqueta?: string }[];
   personas: { email: string; nombre: string; tecnico: boolean; responsable: boolean }[];
   equipos: EquipoTiming[];
 }
@@ -77,6 +78,7 @@ export function vistasTiming(sesion: Sesion): VistaTiming[] {
   if (tienePerfil(sesion, 'solicitante')) vistas.push('solicitudes');
   if (tienePerfil(sesion, 'tecnico')) vistas.push('cola');
   if (gestiona) vistas.push('planificacion');
+  if (tienePerfil(sesion, 'coordinador')) vistas.push('orden');
   vistas.push('historico');
   if (gestiona) vistas.push('configuracion');
   return vistas;
@@ -97,17 +99,48 @@ export function leerRutaTiming(hash: string): { vista?: VistaTiming; id?: number
   if (!Object.hasOwn(VISTAS_TIMING, vista) || extra !== undefined) return { invalida: true };
   if (segmento === undefined) return { vista: vista as VistaTiming };
   const numero = Number(id);
-  if (segmento !== 'tarea' || !/^[1-9]\d*$/.test(id ?? '') || !Number.isSafeInteger(numero) || vista === 'configuracion') return { invalida: true };
+  if (segmento !== 'tarea' || !/^[1-9]\d*$/.test(id ?? '') || !Number.isSafeInteger(numero) || vista === 'configuracion' || vista === 'orden') return { invalida: true };
   return { vista: vista as VistaTiming, id: numero };
 }
 
-export function ordenarCola(tareas: TareaTiming[], dia: string): TareaTiming[] {
-  const grupo = (t: TareaTiming) => t.diaTrabajo === dia ? 0 : !t.diaTrabajo ? 1 : 2;
-  return [...tareas].sort((a, b) => grupo(a) - grupo(b)
-    || (a.diaTrabajo ?? '').localeCompare(b.diaTrabajo ?? '')
-    || (a.ordenDiario ?? Infinity) - (b.ordenDiario ?? Infinity)
+/** Orden diario por defecto (como en el Excel): menos de 9 = orden del día; 99 o más = genéricas y ausencias. */
+export const ORDEN_POR_DEFECTO = 9;
+export const ORDEN_FINAL = 99;
+
+export type GrupoOrden = 'dia' | 'cola' | 'final';
+export const GRUPOS_ORDEN: Record<GrupoOrden, string> = {
+  dia: 'Orden del día', cola: 'En cola', final: 'Genéricas y ausencias',
+};
+
+export function grupoOrden(t: Pick<TareaTiming, 'ordenDiario'>): GrupoOrden {
+  const o = t.ordenDiario;
+  if (o == null || (o >= ORDEN_POR_DEFECTO && o < ORDEN_FINAL)) return 'cola';
+  return o < ORDEN_POR_DEFECTO ? 'dia' : 'final';
+}
+
+/** Cola de un técnico como en Timing R&T: orden diario, después prioridad (menor = más urgente). */
+export function ordenarCola(tareas: TareaTiming[]): TareaTiming[] {
+  const g = { dia: 0, cola: 1, final: 2 };
+  return [...tareas].sort((a, b) => g[grupoOrden(a)] - g[grupoOrden(b)]
+    || (a.ordenDiario ?? ORDEN_POR_DEFECTO) - (b.ordenDiario ?? ORDEN_POR_DEFECTO)
     || (a.prioridad ?? Infinity) - (b.prioridad ?? Infinity)
     || a.id - b.id);
+}
+
+/**
+ * Valores que deja el panel del coordinador: las del día se numeran 1, 2, 3…;
+ * las que pasan a la cola o al final toman 9 o 99 si no estaban ya en ese tramo.
+ * Devuelve solo las tareas cuyo orden cambia.
+ */
+export function nuevoOrdenDiario(grupos: Record<GrupoOrden, TareaTiming[]>): { tarea: TareaTiming; ordenDiario: number }[] {
+  const cambios: { tarea: TareaTiming; ordenDiario: number }[] = [];
+  // Si el día sigue exactamente como estaba (mismas tareas en el mismo orden) se conservan sus números (0, 1, 2…).
+  const ordenado = ordenarCola(grupos.dia);
+  const igual = grupos.dia.every((t, i) => grupoOrden(t) === 'dia' && ordenado[i].id === t.id);
+  if (!igual) grupos.dia.forEach((t, i) => { if (t.ordenDiario !== i + 1) cambios.push({ tarea: t, ordenDiario: i + 1 }); });
+  grupos.cola.forEach((t) => { if (grupoOrden(t) !== 'cola' || t.ordenDiario == null) cambios.push({ tarea: t, ordenDiario: ORDEN_POR_DEFECTO }); });
+  grupos.final.forEach((t) => { if (grupoOrden(t) !== 'final') cambios.push({ tarea: t, ordenDiario: ORDEN_FINAL }); });
+  return cambios;
 }
 
 const compararTexto = new Intl.Collator('es', { numeric: true, sensitivity: 'base' });

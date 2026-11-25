@@ -17,6 +17,8 @@
  *   esta página tenía pendientes, en lugar de hacer esperar a la página nueva.
  */
 
+import { esFoto } from '../api/foto';
+
 const INTERVALO_LATIDO_MS = 5000;
 
 function nuevoCodigo(): string {
@@ -35,6 +37,8 @@ export function codigoPestana(): string {
 }
 
 export function iniciarCicloDeVida(): () => void {
+  // La foto de solo lectura (📤 Export read-only) no tiene backend al que avisar.
+  if (esFoto()) return () => undefined;
   const codigo = CODIGO_PESTANA;
   const cuerpo = JSON.stringify({ pestana: codigo });
 

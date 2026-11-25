@@ -79,6 +79,18 @@ public class ConfiguracionController {
         return JsonJs.objetoVacio().put("ok", true);
     }
 
+    /** Nombre y número de un proyecto (Admin o Lab User): {id, nombre, numero, anteriorNombre, anteriorNumero}. */
+    @PutMapping("/proyectos/editar")
+    public ObjectNode editarProyecto(@RequestBody JsonNode cuerpo) {
+        sesion.exigirAdminOLabUser(sesion.usuarioActual());
+        JsonNode id = cuerpo.path("id");
+        if (!id.canConvertToLong() || id.asLong() <= 0) {
+            throw new com.borgwarner.tbp.dominio.operaciones.ReglaNoCumplida("El identificador del proyecto no es válido.");
+        }
+        return catalogos.editarProyecto(id.asLong(), cuerpo.path("nombre").asText(""), cuerpo.path("numero").asText("").trim(),
+                cuerpo.path("anteriorNombre").asText(""), cuerpo.path("anteriorNumero").asText(""));
+    }
+
     /**
      * Guardar la configuración de bancos y proyectos. Desde D62 solo un Admin o un Lab User
      * (un Editor solo ve los proyectos). La orden contable de los proyectos («projectOrders»,

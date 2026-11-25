@@ -299,6 +299,18 @@ export interface FotoSemanal {
   org: string;
 }
 
+/** Estado de la foto de una semana del histórico (D64, GET /api/v1/indicadores/estado-fotos). */
+export interface EstadoFotoSemana {
+  year: number;
+  cw: number;
+  /** Día (yyyy-mm-dd) y hora (hh:mm, Madrid; null en filas antiguas) de la última foto. */
+  fecha: string | null;
+  hora: string | null;
+  /** manual = botón, auto = tarea de cada noche, export = Export read-only; null = fila antigua. */
+  origen: 'manual' | 'auto' | 'export' | null;
+  estado: 'en-curso' | 'cerrada' | 'provisional' | 'importada';
+}
+
 /* ===== KPI History (bloque C) ========================================== */
 
 /** Una semana del histórico (kpiHistRows de la 4.9.4). */

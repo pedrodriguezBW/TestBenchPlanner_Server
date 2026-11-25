@@ -44,6 +44,13 @@ import java.util.function.Function;
  * El DataJson de cada ensayo se fusiona por campos (no como texto). Si el
  * resultado coincide con uno de los lados, se conserva su texto original byte a
  * byte (así no se reescriben filas sin cambios).
+ *
+ * D65:
+ *  - Elementos protegidos (usuarios con perfil de Timing R&T o cuenta, proyectos
+ *    que usa Timing): nunca se borran, aunque falten en SharePoint o la
+ *    resolución diga «borrar».
+ *  - Histórico de KPI: cada semana (Year|CW|Org) es una foto y no se mezcla
+ *    campo a campo. Si cambió en los dos lados, vale entera la del servidor.
  */
 public final class FusionTresVias {
 
@@ -150,10 +157,24 @@ public final class FusionTresVias {
      * @param resoluciones resoluciones de conflictos (o {@link Resoluciones#NINGUNA})
      */
     public FusionTresVias(Function<String, Object> lectorJson, Function<Object, String> escritorJson, Resoluciones resoluciones) {
+        this(lectorJson, escritorJson, resoluciones, Map.of());
+    }
+
+    /**
+     * @param protegidos claves que nunca se borran, por lista («usuarios.json#», «configuracion.json#projects»)
+     */
+    public FusionTresVias(Function<String, Object> lectorJson, Function<Object, String> escritorJson, Resoluciones resoluciones,
+                          Map<String, Set<String>> protegidos) {
         this.lectorJson = lectorJson;
         this.escritorJson = escritorJson;
         this.resoluciones = resoluciones == null ? Resoluciones.NINGUNA : resoluciones;
+        this.protegidos = protegidos == null ? Map.of() : protegidos;
     }
+
+    private final Map<String, Set<String>> protegidos;
+
+    /** Histórico de KPI: una semana es una foto entera (D65). */
+    static final String KPIS = "kpis.json";
 
     /**
      * Fusiona las tres copias. Cada mapa es nombre de fichero → árbol; un
@@ -307,7 +328,7 @@ public final class FusionTresVias {
                 contar(c.fichero(), "borradosEnAmbos");
                 continue;
             } else if (sx == AUSENTE || lx == AUSENTE) {
-                r = borrado(ce, bx, sx, lx);
+                r = borrado(ce, bx, sx, lx, protegido(c.fichero(), ruta, k));
                 if (r == AUSENTE) {
                     continue;
                 }
@@ -322,6 +343,11 @@ public final class FusionTresVias {
         return salida;
     }
 
+    private boolean protegido(String fichero, String ruta, String clave) {
+        Set<String> claves = protegidos.get(fichero + "#" + ruta);
+        return claves != null && claves.contains(clave);
+    }
+
     private Object fusionarElemento(Contexto c, Object b, Object s, Object l) {
         if (igual(s, l) || igual(b, s)) {
             return l;
@@ -329,6 +355,12 @@ public final class FusionTresVias {
         if (igual(b, l)) {
             contar(c.fichero(), "elementosDesdeSharePoint");
             return s;
+        }
+        if (KPIS.equals(c.fichero()) && c.elemento().indexOf(" / ") < 0) {
+            // D65: la semana cambió en los dos lados; no se mezclan dos fotos: vale la del servidor.
+            contar(c.fichero(), "semanasDelServidor");
+            avisos.add(KPIS + " " + c.elemento() + ": la semana cambió en SharePoint y en el servidor; se conserva entera la del servidor");
+            return l;
         }
         if (s instanceof Map<?, ?> sm && l instanceof Map<?, ?> lm) {
             contar(c.fichero(), "elementosFusionados");
@@ -338,8 +370,8 @@ public final class FusionTresVias {
         return conflicto(c, "", b, s, l);
     }
 
-    /** Borrado en un lado: se conserva salvo que la resolución diga «borrar». */
-    private Object borrado(Contexto c, Object b, Object s, Object l) {
+    /** Borrado en un lado: se conserva salvo que la resolución diga «borrar» (y el elemento no esté protegido). */
+    private Object borrado(Contexto c, Object b, Object s, Object l, boolean protegido) {
         boolean enSharePoint = s == AUSENTE;
         Object queda = enSharePoint ? l : s;
         String tipo = igual(b, queda) ? BORRADO : BORRADO_MODIFICADO;
@@ -354,6 +386,10 @@ public final class FusionTresVias {
             // Por defecto: un borrado hecho en el servidor sin cambios en SharePoint se respeta (no se pierde
             // nada de la base); cualquier otro caso se conserva, para que la importación nunca borre datos sola.
             elegido = !enSharePoint && BORRADO.equals(tipo) ? BORRAR : CONSERVAR;
+        }
+        if (enSharePoint && protegido && BORRAR.equals(elegido)) {
+            avisos.add(c.fichero() + " " + c.elemento() + ": no se borra aunque falte en SharePoint (lo usa Timing R&T o tiene cuenta en el servidor)");
+            elegido = CONSERVAR;
         }
         decisiones.add(new Decision(id, tipo, c.fichero(), c.elemento(), "", enSharePoint ? SHAREPOINT : LOCAL, b, s, l,
                 elegido, false));

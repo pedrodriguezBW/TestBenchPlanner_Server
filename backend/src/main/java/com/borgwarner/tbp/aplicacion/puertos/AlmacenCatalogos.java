@@ -35,6 +35,15 @@ public interface AlmacenCatalogos {
         throw new ReglaNoCumplida("Project Number se gestiona con PostgreSQL.");
     }
 
+    /**
+     * Cambia nombre y número de un proyecto (por su id) y actualiza lo que lo usa.
+     * anteriorNombre/anteriorNumero: lo que vio quien edita (si ha cambiado, se rechaza).
+     */
+    default com.fasterxml.jackson.databind.node.ObjectNode editarProyecto(long id, String nombre, String numero,
+                                                                           String anteriorNombre, String anteriorNumero) {
+        throw new ReglaNoCumplida("Editar proyectos solo es posible con PostgreSQL.");
+    }
+
     /** true si las áreas se gestionan desde la aplicación (PostgreSQL, D56). */
     default boolean areasEditables() {
         return false;

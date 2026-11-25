@@ -29,13 +29,12 @@ import java.nio.file.Path;
  * Exportar / importar desde la línea de órdenes (scripts/servidor/*.cmd):
  *
  *   --planner.almacen=sharepoint --planner.migracion.exportar=CARPETA   (PC con permisos)
- *   --planner.almacen=postgresql --planner.migracion.importar=CARPETA   (servidor)
- *       [--planner.migracion.simular=true]
  *
- *   Fusión de tres vías (conserva lo hecho en PostgreSQL y añade lo de SharePoint):
+ *   Fusión de tres vías (la única importación desde D65) (conserva lo hecho en PostgreSQL y añade lo de SharePoint):
  *   --planner.almacen=postgresql --planner.migracion.importar=CARPETA_SHAREPOINT
  *       --planner.migracion.base=CARPETA_BASE [--planner.migracion.resoluciones=conflictos.json]
  *       [--planner.migracion.salida=CARPETA_TRABAJO] [--planner.migracion.simular=true]
+ *       [--planner.migracion.forzar-base=true]
  *
  * Con salir-al-terminar (por defecto) la aplicación se cierra al acabar con
  * código 0 si todo ha ido bien, 1 si no y 3 si la fusión tiene conflictos sin resolver.
@@ -46,6 +45,8 @@ public class TareasMigracion implements ApplicationRunner {
     private static final Logger LOG = LoggerFactory.getLogger(TareasMigracion.class);
     /** Código de salida: la fusión de tres vías tiene conflictos sin resolver (no se ha importado nada). */
     static final int CODIGO_CONFLICTOS = 3;
+    /** D65: la carpeta base no es la exportación con la que se cargó la base. */
+    static final int CODIGO_BASE = 4;
 
     private final PropiedadesPlanner propiedades;
     private final ApplicationContext contexto;
@@ -77,8 +78,12 @@ public class TareasMigracion implements ApplicationRunner {
             }
             if (!importar.isEmpty()) {
                 String base = m.base() == null ? "" : m.base().trim();
-                codigo = base.isEmpty() ? (importar(Path.of(importar), m.simular()) ? 0 : 1)
-                        : reconciliar(Path.of(base), Path.of(importar), m);
+                if (base.isEmpty()) {
+                    // D65: la importación clásica dejaba la base IGUAL que SharePoint y borraba lo hecho en el servidor.
+                    throw new IllegalArgumentException("La importación clásica (sin carpeta base) se ha retirado: borraría lo hecho "
+                            + "en el servidor. Usa la fusión de tres vías: importar-en-postgresql.cmd CARPETA_BASE CARPETA_SHAREPOINT");
+                }
+                codigo = reconciliar(Path.of(base), Path.of(importar), m);
             }
         } catch (RuntimeException e) {
             LOG.error("La migración de datos no se ha completado: {}", e.getMessage(), e);
@@ -101,21 +106,6 @@ public class TareasMigracion implements ApplicationRunner {
         LOG.info("EXPORTACIÓN COMPLETA en {}\n{}", destino.toAbsolutePath(), bonito(manifiesto));
     }
 
-    private boolean importar(Path carpeta, boolean simular) {
-        ImportadorDatos imp = importador.getIfAvailable();
-        if (imp == null) {
-            throw new IllegalStateException("La importación solo se hace con --planner.almacen=postgresql");
-        }
-        ObjectNode informe = imp.importar(carpeta, simular);
-        String resultado = informe.path("resultado").asText();
-        if ("RECHAZADO".equals(resultado)) {
-            LOG.error("IMPORTACIÓN RECHAZADA: la base no queda igual que la exportación; no se ha guardado nada.\n{}", bonito(informe));
-            return false;
-        }
-        LOG.info("IMPORTACIÓN {}\n{}", "SIMULADO".equals(resultado) ? "SIMULADA (no se ha guardado nada)" : "COMPLETA", bonito(informe));
-        return true;
-    }
-
     /** Importación con fusión de tres vías (ReconciliacionTresVias). */
     private int reconciliar(Path base, Path sharepoint, PropiedadesPlanner.Migracion m) {
         ImportadorDatos imp = importador.getIfAvailable();
@@ -126,9 +116,16 @@ public class TareasMigracion implements ApplicationRunner {
         String salida = m.salida() == null ? "" : m.salida().trim();
         ObjectNode informe = new ReconciliacionTresVias(imp, exportador).ejecutar(base, sharepoint,
                 resoluciones.isEmpty() ? null : Path.of(resoluciones), salida.isEmpty() ? null : Path.of(salida), m.simular(),
-                m.maxActividadEfectiva());
+                m.maxActividadEfectiva(), m.forzarBase());
         String resultado = informe.path("resultado").asText();
         String trabajo = informe.path("carpetaTrabajo").asText();
+        if (ReconciliacionTresVias.BASE_NO_VERIFICADA.equals(resultado)) {
+            LOG.error("CARPETA BASE SIN VERIFICAR: no se ha guardado nada.\n{}\n{}\n"
+                            + "Usa como base la exportación de SharePoint con la que se cargó el servidor. Si estás seguro de la "
+                            + "carpeta, lanza la simulación, revisa el informe y aplica con «forzar-base».",
+                    informe.path("comprobacionBase").path("detalle").asText(), bonito(informe));
+            return CODIGO_BASE;
+        }
         if (ReconciliacionTresVias.CONFLICTOS.equals(resultado)) {
             LOG.error("FUSIÓN CON CONFLICTOS: {} sin resolver; no se ha guardado nada.\n{}\n"
                             + "Resuélvelos en {}\\conflictos.json y vuelve a lanzar con ese fichero.",

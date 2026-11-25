@@ -138,10 +138,12 @@ class TimingPostgresTest {
 
         hecho(admin.json("PUT", "/api/v1/proyectos/numero", objeto().put("proyecto", "00042 - Proyecto de prueba")
                 .put("anterior", "00042").put("numero", "00043")));
-        assertEquals("00042", admin.leer(API + "/tareas/" + id).path("cuenta").asText());
+        // Cambiar el número en el catálogo lo actualiza también en las tareas de ese proyecto.
+        assertEquals("00043", admin.leer(API + "/tareas/" + id).path("cuenta").asText());
         // Restituir el número para las demás pruebas de esta base de datos.
         hecho(admin.json("PUT", "/api/v1/proyectos/numero", objeto().put("proyecto", "00042 - Proyecto de prueba")
                 .put("anterior", "00043").put("numero", "00042")));
+        tarea = admin.leer(API + "/tareas/" + id); // la tarea ha cambiado de versión
 
         tarea = hecho(operacion(admin, tarea, "reabrir", objeto().put("motivo", "Repetir la verificación")));
         assertFalse(tarea.path("disponible").asBoolean());

@@ -3,7 +3,9 @@ import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from '
 import type { Sesion } from '../../api/tipos';
 import { timingApi, type InformeTiming } from './cliente';
 import { Campo, DetalleTiming, EditorTarea, EstadoTiming } from './DetalleTiming';
-import { CAMARA_CLIMATICA, enlaceTiming, ordenarCola, ordenarTareas, sugerenciasTiming, responsableTiming, tecnicoTiming, tienePerfil, VISTAS_TIMING, type ColumnaTiming, type OrdenTiming, type EquipoTiming, type OpcionesTiming, type TareaTiming, type VistaTiming } from './modelo';
+import { DatosSinVincular } from './DatosSinVincular';
+import { PanelOrdenDiario } from './PanelOrdenDiario';
+import { CAMARA_CLIMATICA, enlaceTiming, grupoOrden, GRUPOS_ORDEN, ordenarCola, ordenarTareas, sugerenciasTiming, responsableTiming, tecnicoTiming, tienePerfil, VISTAS_TIMING, type ColumnaTiming, type OrdenTiming, type EquipoTiming, type OpcionesTiming, type TareaTiming, type VistaTiming } from './modelo';
 
 const errorTexto = (error: unknown) => error instanceof Error ? error.message : String(error);
 const TAMANO_PAGINA = 35;
@@ -23,7 +25,6 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
   const [pagina, setPagina] = useState(0);
   const [orden, setOrden] = useState<OrdenTiming>();
   const [filtros, setFiltros] = useState(FILTROS_VACIOS);
-  const [diaElegido, setDiaElegido] = useState('');
   const workspace = useRef<HTMLElement>(null);
   const puedeCrear = tienePerfil(sesion, 'solicitante') || tienePerfil(sesion, 'coordinador');
   const destinoAlta = tienePerfil(sesion, 'solicitante') ? 'solicitudes' : 'planificacion';
@@ -38,7 +39,7 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
   }, [revision]);
 
   useEffect(() => {
-    if (vista === 'configuracion') return;
+    if (vista === 'configuracion' || vista === 'orden') return;
     let cancelar = false;
     timingApi.lista(vista).then((tareas) => { if (!cancelar) setDatos({ vista, tareas }); })
       .catch((e: unknown) => { if (!cancelar) setError(errorTexto(e)); });
@@ -46,7 +47,7 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
   }, [vista, revision]);
 
   useEffect(() => {
-    if (!id || vista === 'configuracion') return;
+    if (!id || vista === 'configuracion' || vista === 'orden') return;
     let cancelar = false;
     setErrorDetalle(undefined);
     timingApi.detalle(id).then((r) => { if (!cancelar) setDetalle(r); })
@@ -96,7 +97,6 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
   const visibles = datos?.vista === vista ? datos.tareas : [];
   const sugerencias = useMemo(() => sugerenciasTiming(datos?.vista === vista ? datos.tareas : [], opciones), [datos, vista, opciones]);
   const nombresProyecto = useMemo(() => new Map(opciones?.proyectos.map((p) => [p.id, p.nombre])), [opciones]);
-  const dia = diaElegido || opciones?.hoy || '';
   const busca = filtros.texto.toLocaleLowerCase('es-ES').trim();
   const porTexto = (valor?: string) => valor?.toLocaleLowerCase('es-ES').includes(busca);
   const coincide = (columna: string, valor?: string) => !columna || !!valor?.toLocaleLowerCase('es-ES').includes(columna.toLocaleLowerCase('es-ES'));
@@ -111,7 +111,7 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
       && coincide(filtros.cuenta, t.cuenta)
       && coincide(filtros.banco, t.banco);
   });
-  const ordenadas = orden ? ordenarTareas(filtradas, orden) : vista === 'cola' ? ordenarCola(filtradas, dia) : filtradas;
+  const ordenadas = orden ? ordenarTareas(filtradas, orden) : vista === 'cola' ? ordenarCola(filtradas) : filtradas;
   const paginas = Math.max(1, Math.ceil(ordenadas.length / TAMANO_PAGINA));
   const paginaVisible = Math.min(pagina, paginas - 1);
   const filas = ordenadas.slice(paginaVisible * TAMANO_PAGINA, (paginaVisible + 1) * TAMANO_PAGINA);
@@ -122,9 +122,9 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
   const seleccion = detalle?.id === id ? detalle : undefined;
   const { texto: _busqueda, ...adicionales } = filtros;
   const activos = Object.values(adicionales).filter(Boolean).length;
-  const grupoCola = (t: TareaTiming) => t.diaTrabajo === dia ? 'Trabajo del día' : !t.diaTrabajo ? 'Pendientes sin programar' : 'Otras fechas';
+  const grupoCola = (t: TareaTiming) => GRUPOS_ORDEN[grupoOrden(t)];
   const esCola = vista === 'cola';
-  const columnas = esCola ? 8 : 6;
+  const columnas = esCola ? 7 : 6;
   const cabecera = (columna: ColumnaTiming, etiqueta: string) => {
     const activa = orden?.columna === columna;
     const porDefecto = !orden && !esCola && columna === 'prioridad';
@@ -159,7 +159,8 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
     {opciones && vista === 'configuracion' && <ConfigTiming
       opciones={opciones} admin={sesion.esAdmin} ocupado={ocupado} guardar={guardar}
     />}
-    {opciones && vista !== 'configuracion' && <div className={'timing-contenido' + (nueva || id ? ' con-detalle' : '')}>
+    {opciones && vista === 'orden' && <PanelOrdenDiario opciones={opciones} revision={revision} ocupado={ocupado} guardar={guardar} />}
+    {opciones && vista !== 'configuracion' && vista !== 'orden' && <div className={'timing-contenido' + (nueva || id ? ' con-detalle' : '')}>
       <section className="timing-lista card" aria-label="Lista de tareas">
         <div className="timing-filtros">
           <div className="timing-barra-lista">
@@ -169,8 +170,6 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
           </div>}
           <div className="timing-busqueda">
             <input className="f" type="search" aria-label="Buscar tarea" placeholder="Buscar tarea" value={filtros.texto} onChange={(e) => filtro('texto', e.target.value)} />
-            {vista === 'cola' && <input className="f" aria-label="Día de trabajo" type="date" value={dia}
-              onChange={(e) => { setDiaElegido(e.target.value); setPagina(0); }} />}
             <details className="timing-filtros-extra">
               <summary>Filtros{activos > 0 ? ` (${activos})` : ''}</summary>
               <div className="timing-filtros-panel">
@@ -198,7 +197,7 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
           <table className="lst timing-tabla-tareas">
             <thead><tr>{esCola && cabecera('ordenDiario', 'Orden diario')}{cabecera('prioridad', 'Prioridad')}<th scope="col">Tarea</th>
               {cabecera('cuenta', 'N.º de proyecto')}{cabecera('tecnico', 'Técnico')}{cabecera('responsable', 'Responsable')}
-              {esCola && <th scope="col">Día</th>}{cabecera('estado', 'Estado')}</tr></thead>
+              {cabecera('estado', 'Estado')}</tr></thead>
             <tbody>
               {filas.map((tarea, i) => <Fragment key={tarea.id}>
                 {esCola && !orden && (i === 0 || grupoCola(tarea) !== grupoCola(filas[i - 1])) &&
@@ -214,7 +213,6 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
                   <td className="timing-numero">{tarea.cuenta || '—'}</td>
                   <td>{tecnicoTiming(tarea) || '—'}</td>
                   <td>{responsableTiming(tarea) || '—'}</td>
-                  {esCola && <td>{tarea.diaTrabajo || '—'}</td>}
                   <td><EstadoTiming tarea={tarea} /></td>
                 </tr>
               </Fragment>)}
@@ -224,7 +222,7 @@ export function WorkspaceTiming({ vista, id, sesion }: { vista: VistaTiming; id?
         </div>
         <div className="timing-paginacion">
           <span>{ordenadas.length} {ordenadas.length === 1 ? 'tarea' : 'tareas'}</span>
-          {esCola && orden && <button type="button" className="btn ghost sm" onClick={() => { setOrden(undefined); setPagina(0); }}>Volver a la cola del día</button>}
+          {esCola && orden && <button type="button" className="btn ghost sm" onClick={() => { setOrden(undefined); setPagina(0); }}>Volver al orden de la cola</button>}
           {paginas > 1 && <div className="timing-acciones">
             <button className="btn ghost sm" onClick={() => setPagina(paginaVisible - 1)} disabled={paginaVisible === 0}>Anterior</button>
             <span>{paginaVisible + 1} de {paginas}</span>
@@ -274,6 +272,7 @@ function ConfigTiming({ opciones, admin, ocupado, guardar }: {
     }, simular ? 'Vista previa preparada.' : 'Importación completada.');
   };
   return <div className="timing-configuracion">
+    <DatosSinVincular opciones={opciones} ocupado={ocupado} guardar={guardar} />
     <section className="card">
       <h2>Bancos y cámaras</h2>
       <form className="timing-form-grid" onSubmit={alta}>

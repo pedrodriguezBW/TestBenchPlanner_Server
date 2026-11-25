@@ -3,6 +3,7 @@ import { usePlanificador } from '../../estado/Planificador';
 import type { Organizacion } from '../../estado/Panel';
 import { areasDe, filtroDe, partesFiltro, ORGANIZACIONES_BANCO, type CodigoArea, type OrganizacionBanco } from '../../utilidades/areas';
 import { usePreferencia } from '../../utilidades/preferencias';
+import { esFoto } from '../../api/foto';
 
 /* Piezas comunes del Dashboard y de «By Responsible». */
 
@@ -17,7 +18,8 @@ export function useConsulta<T>(cargar: () => Promise<T>, claves: unknown[]): T |
   const [datos, setDatos] = useState<T | null>(null);
   useEffect(() => {
     let vigente = true;
-    cargar().then((d) => { if (vigente) setDatos(d); }).catch(() => undefined);
+    // En la foto de solo lectura, lo que no se exportó (una semana fuera del año) se queda en blanco, no con lo anterior.
+    cargar().then((d) => { if (vigente) setDatos(d); }).catch(() => { if (vigente && esFoto()) setDatos(null); });
     return () => { vigente = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [vista, ...claves]);
@@ -36,8 +38,11 @@ export function SelectorOrganizacion({ valor, onCambiar, etiqueta = 'Org:', comp
   const areas = areasDe(vista);
   const partes = partesFiltro(valor);
   // Un área que ya no existe (borrada) se muestra como ALL; el backend también la trata como ALL.
-  const area = partes.area === 'ALL' || areas.some((a) => a.clave === partes.area) ? partes.area : 'ALL';
-  const org = area === 'ALL' ? 'ALL' : partes.org;
+  // En la foto de solo lectura solo hay Thermal Benches: ALL es Thermal Benches y no se ofrece aparte.
+  const foto = esFoto();
+  const area = foto ? areas[0]?.clave ?? 'ALL'
+    : partes.area === 'ALL' || areas.some((a) => a.clave === partes.area) ? partes.area : 'ALL';
+  const org = area === 'ALL' || partes.area === 'ALL' ? 'ALL' : partes.org;
   const conOrg = area !== 'ALL' && areas.find((a) => a.clave === area)?.organizacionFija === null;
   const estilo = compacto
     ? { padding: '4px 6px', borderRadius: 6, background: 'var(--navy)', color: 'var(--text)', border: '1px solid var(--line)', fontSize: 12 }
@@ -48,7 +53,7 @@ export function SelectorOrganizacion({ valor, onCambiar, etiqueta = 'Org:', comp
       <label className="hint" style={{ margin: compacto ? 0 : '0 0 0 8px' }} data-solo-nueva="">{etiquetaArea}</label>
       <select style={estilo} value={area} data-filtro-area="" data-solo-nueva=""
         onChange={(e) => onCambiar(filtroDe(e.target.value as 'ALL' | CodigoArea, 'ALL'))}>
-        <option value="ALL">ALL</option>
+        {!foto && <option value="ALL">ALL</option>}
         {areas.map((a) => <option key={a.clave} value={a.clave}>{a.nombre}</option>)}
       </select>
       {conOrg && (

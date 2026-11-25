@@ -3,7 +3,8 @@
  * matriz del Gantt que se envía al backend para el Excel (buildGanttMatrix de
  * la 4.9.4). Todo lo calculado (inicio y fin de cada ensayo) viene del backend.
  */
-import { api } from '../../api/cliente';
+import { api, peticion } from '../../api/cliente';
+import { esFoto, vistaSoloTermicos, type FotoSoloLectura, type IndicadoresFoto } from '../../api/foto';
 import type { Bloqueo, FilaEnsayo, Recurso, Vista } from '../../api/tipos';
 import { dia, diasEntre, esFinDeSemana, iso, lunesDe, semanaIso, sumarDias } from '../../utilidades/fechas';
 import { cumpleFiltro, nombresArea, normalizarArea } from '../../utilidades/areas';
@@ -137,6 +138,7 @@ export function matrizGantt(vista: Vista, que: VistaGantt, foco: string): Matriz
 
 /** 📊 Excel (exportGanttExcel): pide el .xlsx al backend y lo descarga. */
 export async function exportarGanttExcel(m: MatrizGantt | null) {
+  if (esFoto()) { window.alert('Excel export needs the TestBenchPlanner server: it is not available in this read-only snapshot.'); return; }
   if (!m || !m.rows.length) { window.alert('No hay datos que exportar en esta vista.'); return; }
   try {
     const r = await api.exportarGantt(m);
@@ -155,31 +157,90 @@ export async function exportarCopiaJson() {
 }
 
 /**
- * 📤 Export read-only (exportReadOnly de la 4.9.4): un HTML que se abre sin
- * backend, en solo lectura, para enviarlo al proveedor. Es el HTML de la 4.9.4
- * (el mismo que /clasico; ruta propia porque el servidor no ofrece /clasico) con el estado, la base de IDs y la lista de
- * aprobaciones incrustados, igual que hacía la 4.9.4 con su propia página.
+ * 📤 Export read-only (exportReadOnly de la 4.9.4, con la interfaz nueva): un
+ * único .html que se abre sin backend, en solo lectura, para enviarlo al
+ * proveedor. Lleva esta misma aplicación (su JavaScript, sus estilos y sus
+ * imágenes, todo dentro del fichero) y los datos de Thermal Benches del momento
+ * de exportar: la planificación, los catálogos que se ven, el estado de los
+ * Approval ID y los indicadores precalculados semana a semana (ver api/foto.ts).
+ * El resto de áreas, la configuración, la facturación y Timing R&T no van.
  */
-export async function exportarSoloLectura(hoy: string) {
-  const [html, estado, aprobaciones] = await Promise.all([
-    fetch('/api/v1/exportaciones/plantilla-solo-lectura').then((r) => { if (!r.ok) throw new Error('No se pudo leer la plantilla de solo lectura'); return r.text(); }),
-    api.copiaSeguridad(),
-    api.aprobaciones().catch(() => []),
+export async function exportarSoloLectura(version: string) {
+  const texto = async (ruta: string) => {
+    const r = await fetch(ruta, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`No se pudo leer ${ruta} (${r.status})`);
+    return r.text();
+  };
+  const comoDatos = async (ruta: string) => {
+    const r = await fetch(ruta);
+    if (!r.ok) return ruta;
+    const blob = await r.blob();
+    return new Promise<string>((resolver) => {
+      const lector = new FileReader();
+      lector.onload = () => resolver(String(lector.result));
+      lector.onerror = () => resolver(ruta);
+      lector.readAsDataURL(blob);
+    });
+  };
+
+  // La página compilada (dist/index.html): un módulo JS y una hoja de estilos.
+  const pagina = await texto('/index.html');
+  const rutaJs = /<script[^>]*type="module"[^>]*src="([^"]+)"/.exec(pagina)?.[1];
+  const rutasCss = [...pagina.matchAll(/<link[^>]*rel="stylesheet"[^>]*href="([^"]+)"/g)].map((m) => m[1]);
+  if (!rutaJs) throw new Error('No se encuentra la aplicación compilada (index.html sin módulo)');
+  const [js, css, logo, ciudad, vistaCompleta, catalogos, indicadores] = await Promise.all([
+    texto(rutaJs),
+    Promise.all(rutasCss.map(texto)).then((l) => l.join('\n')),
+    comoDatos('/logo.png'),
+    comoDatos('/ciudad.jpg'),
+    api.planificacion(),
+    api.catalogos(),
+    peticion<IndicadoresFoto>('GET', '/api/v1/indicadores/foto-solo-lectura?area=THERMAL'),
   ]);
-  const idDb: Record<string, string> = {};
-  const filasId = aprobaciones.map((a) => {
-    const raw = a.raw != null && a.raw !== '' ? String(a.raw) : String(a.status || '');
-    idDb[String(a.id)] = raw;
-    idDb[`ID ${a.id}`] = raw;
-    return { id: String(a.id), raw, requester: a.requester || '', service: a.service || '' };
-  }).sort((x, y) => x.id.localeCompare(y.id, undefined, { numeric: true }));
-  // «<\/script>» dentro de los datos cerraría la etiqueta: se escapa la barra.
-  const json = (v: unknown) => JSON.stringify(v).replace(/<\//g, '<\\/');
-  const inyeccion = `<script>window.__READONLY__=true;window.__EMBEDDED_STATE__=${json(estado)};window.__EMBEDDED_IDDB__=${json(idDb)};`
-    + `window.__EMBEDDED_IDROWS__=${json(filasId)};<\/script>`;
-  const salida = html.replace('<!--BW_APP_MARKER-->', `${inyeccion}\n<!--BW_APP_MARKER-->`);
-  const d = dia(hoy)!;
+
+  const vista = vistaSoloTermicos(vistaCompleta);
+  const filas = Object.values(vista.bancos).flat();
+  const usados = (campo: string) => new Set(filas.map((f) => String(f.datos[campo] ?? '').trim()).filter(Boolean));
+  const proyectos = usados('project');
+  const responsables = usados('resp');
+  const ids = [...usados('approvalId')];
+  const estadosAprobacion = ids.length ? await api.estadosAprobacion(ids).catch(() => ({})) : {};
+  const ahora = new Date();
+  const generada = `${iso(ahora)}T${String(ahora.getHours()).padStart(2, '0')}:${String(ahora.getMinutes()).padStart(2, '0')}`;
+  const foto: FotoSoloLectura = {
+    formato: 1,
+    generada,
+    version,
+    vista,
+    // Solo lo que aparece en Thermal Benches (sin usuarios, correos ni el resto de proyectos).
+    catalogos: {
+      projects: (catalogos.projects ?? []).filter((p) => proyectos.has(p)),
+      responsibles: (catalogos.responsibles ?? []).filter((r) => responsables.has(r)),
+    },
+    estadosAprobacion,
+    indicadores: { ...indicadores, estadisticas: indicadores.estadisticas.filter((f) => vista.bancos[f.banco]) },
+  };
+
+  // Dentro de <script>, «</script» cerraría la etiqueta: se escapa la barra (en JS «<\/» es lo mismo).
+  const enScript = (codigo: string) => codigo.replace(/<\/script/gi, '<\\/script');
+  const datos = JSON.stringify(foto).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  const codigo = enScript(js.split('"/logo.png"').join(JSON.stringify(logo)).split('"/ciudad.jpg"').join(JSON.stringify(ciudad)));
+  const d = dia(vista.hoy)!;
   const cw = `CW${String(semanaIso(d)).padStart(2, '0')}`;
-  descargar(new Blob([salida.startsWith('<!DOCTYPE') ? salida : `<!DOCTYPE html>\n${salida}`], { type: 'text/html' }),
-    `${cw}_BW_TestBench_ReadOnly_${iso(d)}.html`);
+  const html = `<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>${cw} BW Test Bench Planning \u00b7 Read-only</title>
+<style>${css.replace(/<\/style/gi, '<\\/style')}</style>
+<script>window.__TBP_FOTO__=${datos};</script>
+<script type="module">${codigo}</script>
+</head>
+<body>
+<div id="raiz"></div>
+</body>
+</html>
+`;
+  descargar(new Blob([html], { type: 'text/html' }), `${cw}_BW_TestBench_ReadOnly_${iso(d)}.html`);
 }

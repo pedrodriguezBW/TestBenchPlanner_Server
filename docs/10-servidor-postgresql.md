@@ -16,7 +16,7 @@
 | Instalación | `src/main/resources/db/instalacion/01-…sql`, `02-…sql` y `scripts/servidor/crear-base-de-datos.cmd` | Usuarios `tbp_owner`, `tbp_app`, `tbp_consulta`, base `tbp`, esquema `tbp` y permisos. |
 | Flyway al arrancar | `MigracionesBaseDatos` | Con `tbp_owner` aplica lo pendiente y valida; si la base no cuadra, **la aplicación no arranca**. |
 | Exportador | `infraestructura/migracion/ExportadorDatos` + `scripts/servidor/exportar-desde-sharepoint.cmd` | PC con permisos: lee SharePoint **en solo lectura** con los adaptadores de siempre y escribe una carpeta. |
-| Importador | `infraestructura/postgresql/ImportadorDatos` + `scripts/servidor/importar-en-postgresql.cmd` | Servidor: carga la carpeta en PostgreSQL. Idempotente, en una transacción, con verificación de paridad y modo simulación. |
+| Importador | `infraestructura/postgresql/ImportadorDatos` + `scripts/servidor/importar-en-postgresql.cmd` | Servidor: fusiona la exportación de SharePoint en PostgreSQL (tres vías, D65). En una transacción, con verificación de paridad y modo simulación. |
 | Pruebas | `src/test/java/.../postgresql/` y `integracion/*PostgresTest` | Las mismas pruebas que el almacén local, ahora también contra PostgreSQL real. |
 
 No incluye (hitos siguientes): perfil `servidor`, escuchar en la red y festivos
@@ -135,25 +135,16 @@ scripts\servidor\exportar-desde-sharepoint.cmd D:\tbp-exportacion-2026-11-16
 - Es el formato de un escenario del modo local: se puede abrir con
   `--planner.local.escenario-inicial=<carpeta>` para ver exactamente lo exportado.
 
-### 5.3 Importar (servidor)
+### 5.3 Importación clásica (retirada, D65)
 
-```bat
-scripts\servidor\importar-en-postgresql.cmd D:\tbp-exportacion-2026-11-16 simular
-scripts\servidor\importar-en-postgresql.cmd D:\tbp-exportacion-2026-11-16
-```
-
-- Comprueba las huellas del manifiesto (un fichero retocado o copiado a medias no se importa).
-- Deja la base **exactamente** como la exportación (altas, cambios y bajas) en
-  una sola transacción; el registro de actividad solo se añade. Repetir la misma
-  importación no cambia nada; una exportación más reciente aplica solo las
-  diferencias. Cada cambio queda en `auditoria` con operación IMPORTACION.
-- **Verificación de paridad** antes de confirmar (ver 6). Si algo no cuadra se
-  deshace todo y el informe dice qué (resultado RECHAZADO, código de salida 1).
-- `simular`: hace todo, verifica y deshace (resultado SIMULADO).
-- Durante el piloto (S5) se puede repetir exportar/importar las veces que haga
-  falta. Ojo: importar **sustituye** lo que se haya cambiado en la base desde la
-  importación anterior (la verdad sigue siendo SharePoint hasta el corte). Si se
-  ha trabajado en los dos lados, usar la fusión de tres vías (5.4).
+La importación con una sola carpeta (`importar-en-postgresql.cmd CARPETA`) dejaba
+la base **igual que SharePoint**: borraba los usuarios, proyectos, bancos y
+ensayos creados en el servidor (y, al borrar usuarios, sus perfiles de Timing
+R&T) y sustituía el histórico de KPI. Como el servidor ya tiene datos propios,
+se ha retirado: la única importación es la fusión de tres vías (5.4). El
+importador (`ImportadorDatos`) sigue siendo el que carga la carpeta fusionada:
+una transacción, huellas del manifiesto, **verificación de paridad** (ver 6),
+auditoría IMPORTACION y modo simulación.
 
 ### 5.4 Importar con fusión de tres vías (se ha trabajado en los dos lados)
 
@@ -170,9 +161,45 @@ rem 1) Simular (por defecto): no guarda nada
 scripts\servidor\importar-en-postgresql.cmd D:\tbp-exportacion-2026-11-16 D:\tbp-exportacion-2026-11-23
 rem 2) Si hay conflictos: rellenar «elegir» en conflictos.json y volver a simular con él
 scripts\servidor\importar-en-postgresql.cmd D:\tbp-exportacion-2026-11-16 D:\tbp-exportacion-2026-11-23 simular D:\reconciliacion-…\conflictos.json
-rem 3) Aplicar (servicio parado y copia de seguridad hecha)
+rem 3) Aplicar (servicio parado, consola de Administrador; hace sola la copia de seguridad)
 scripts\servidor\importar-en-postgresql.cmd D:\tbp-exportacion-2026-11-16 D:\tbp-exportacion-2026-11-23 aplicar D:\reconciliacion-…\conflictos.json
 ```
+
+**Salvaguardas (D65)**
+
+1. **Comprobación de la carpeta BASE.** Con una base equivocada, lo que SharePoint
+   tenía y el servidor no se tomaría como «borrado en el servidor» y se perdería
+   sin avisar. Antes de nada se comprueba (`comprobacionBase` en `informe.json`):
+   - si la base ya registró la exportación de SharePoint de su última fusión
+     aplicada (`configuracion_app`, clave `migracion.ultima-exportacion`), la
+     carpeta BASE tiene que ser esa (mismas huellas SHA-256);
+   - si no (base cargada antes de D65), cada ensayo de la carpeta tiene que ser
+     igual a lo que dejó la última importación según la `auditoria`.
+   Sin verificar solo se puede **simular** (resultado `BASE_NO_VERIFICADA`,
+   código 4, al aplicar). Para aplicar igualmente, a propósito: `forzar-base`
+   como último parámetro (`--planner.migracion.forzar-base=true`).
+2. **Lo del servidor no se borra.** Usuarios con perfil de Timing R&T o con
+   cuenta y proyectos que usan las tareas o correspondencias de Timing no se
+   borran aunque falten en SharePoint o `conflictos.json` diga `"borrar"`
+   (aviso en el informe).
+3. **Red de seguridad.** Las tablas que solo existen en el servidor (Timing R&T,
+   `credencial`, `horario_ensayo`, `festivo`, `calendario`) se bloquean durante
+   la importación; si al terminar han cambiado en algo, se deshace todo (RECHAZADO).
+4. **KPI por semanas enteras.** Una semana (`Year|CW|Org`) que cambió en los dos
+   lados no se mezcla campo a campo: vale entera la del servidor (aviso).
+5. **Referencias rotas.** `referenciasRotas` en el informe lista los ensayos que
+   llegan de SharePoint con un proyecto o un banco que no existe en el servidor
+   (p. ej. renombrado en Configuración › Projects). No bloquea: hay que revisarlos.
+6. **Copia de seguridad automática.** `aplicar` lanza antes
+   `servicio\copia-seguridad.ps1 -Motivo antes-de-importar` (copia completa con
+   pg_dump, también Timing y cuentas). Si falla, no se importa nada. Instalación
+   fuera de `C:\TestBenchPlanner`: `set TBP_INSTALACION=…`.
+7. Tras aplicar, la base guarda qué exportación de SharePoint se importó: en la
+   siguiente fusión esa carpeta es la BASE.
+
+**Volcados del corte**: (1) primer volcado con la base con la que se cargó el
+servidor (verificada por la auditoría); (2) volcado final con BASE = la carpeta de
+SharePoint del primer volcado.
 
 | Caso | Resultado |
 |---|---|
@@ -181,8 +208,9 @@ scripts\servidor\importar-en-postgresql.cmd D:\tbp-exportacion-2026-11-16 D:\tbp
 | Mismo campo cambiado distinto en los dos lados | **Conflicto**: no se importa nada hasta resolverlo (`local` o `sharepoint`). |
 | Alta en un lado | Se añade. |
 | Borrado en el servidor, sin cambios en SharePoint | Sigue borrado. |
-| Borrado en SharePoint | **Se conserva** en la base salvo `"elegir": "borrar"`. |
+| Borrado en SharePoint | **Se conserva** en la base salvo `"elegir": "borrar"` (y nunca si lo usa Timing o tiene cuenta, D65). |
 | Borrado en un lado y modificado en el otro | Se conserva la versión modificada salvo `"borrar"`. |
+| Semana de KPI cambiada en los dos lados | Vale entera la del servidor (D65). |
 | Registro de actividad | Solo se añaden filas. |
 | Fichero que no está en la base (p. ej. `tipos-equipo.json`) | Manda PostgreSQL y se añade lo nuevo de SharePoint. |
 
@@ -196,9 +224,9 @@ se importa, con manifiesto), `conflictos.json` (todas las decisiones; en los
 ensayos incluye banco · tipo · proyecto) e `informe.json`. `"porDefecto":
 "local"` o `"sharepoint"` resuelve de golpe los conflictos que queden vacíos.
 
-La carpeta `fusion` se importa con el importador de 5.3 (una transacción,
+La carpeta `fusion` se importa con `ImportadorDatos` (5.3) (una transacción,
 verificación de paridad, auditoría IMPORTACION). Códigos de salida: 0 bien,
-1 error o rechazada, 3 conflictos sin resolver.
+1 error o rechazada, 3 conflictos sin resolver, 4 carpeta base sin verificar (D65).
 
 ### 5.5 Lo aprendido en la primera prueba real (17-nov-2026)
 
@@ -278,6 +306,7 @@ mvnw.cmd clean verify -Dtbp.pruebas.postgresql.url=jdbc:postgresql://127.0.0.1:5
 | `planner.migracion.base` | vacío | Fusión de tres vías: exportación con la que se cargó la base (ver 5.4). |
 | `planner.migracion.resoluciones` | vacío | Fusión de tres vías: `conflictos.json` editado. |
 | `planner.migracion.salida` | vacío | Fusión de tres vías: carpeta de trabajo (vacío = junto a la de SharePoint). |
+| `planner.migracion.forzar-base` | `false` | Fusión de tres vías: aplicar aunque no se pueda comprobar la carpeta base (D65). |
 
 Las claves pueden ir también en variables de entorno: `PLANNER_POSTGRESQL_CLAVEAPP`,
 `PLANNER_POSTGRESQL_CLAVEPROPIETARIO`.
@@ -294,8 +323,10 @@ Las claves pueden ir también en variables de entorno: `PLANNER_POSTGRESQL_CLAVE
 
 ## 10. Pendiente
 
-- Repetir en el PC servidor (Pedro tiene permisos de administrador): instalación
-  (5.1), copiar allí una exportación (5.2), `importar … simular` y la importación (5.3).
+- Volcados del corte (D65, ver 5.4): primero, fusión con la exportación con la que se
+  cargó el servidor como base (simular, revisar `informe.json`, aplicar); el final, con
+  la carpeta de SharePoint del primero como base. La primera carga de una base vacía
+  ya no existe: para rehacer el servidor se restaura una copia de seguridad.
 - Puntos abiertos del plan (§9): **sin nombre DNS por ahora** (se entra por el
   nombre del PC o su IP; el certificado de S4 será autofirmado), gestión de
   aprobaciones desde la app, puerto definitivo y número de usuarios que escriben a la vez.

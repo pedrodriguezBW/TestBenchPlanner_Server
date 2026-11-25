@@ -18,7 +18,6 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.time.format.ResolverStyle;
 import java.text.Normalizer;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -48,7 +47,7 @@ public class ImportadorTiming {
     }
 
     private ObjectNode cargar(TimingPostgres.Acceso acceso, List<Map<String, String>> filas, boolean simular) {
-        bd.bloquear("timing-importacion");
+        bd.bloquear(VinculacionTiming.CERROJO);
         Referencias referencias = new Referencias(bd);
         ObjectNode informe = JsonJs.objetoVacio().put("simulacion", simular).put("filas", filas.size());
         ArrayNode avisos = informe.putArray("avisos");
@@ -111,8 +110,8 @@ public class ImportadorTiming {
         String responsable = ref.email(nombreResponsable);
         String tecnico = ref.email(nombreTecnico);
         String nombreProyecto = valor(fila, "Proyecto");
-        String cuenta = valor(fila, "Cuenta Proyecto");
-        Long proyecto = ref.proyecto(nombreProyecto, cuenta);
+        String cuenta = NombresProyecto.numeroLargo(valor(fila, "Cuenta Proyecto")); // 80834 → 80000834
+        VinculacionTiming.Proyecto proyecto = ref.proyecto(id, nombreProyecto, cuenta);
         String disp = clave(valor(fila, "Disp."));
         String banco = ref.equipo("banco", valor(fila, "Banco Ensayo"));
         String camara = ref.equipo("camara", valor(fila, "Camara_Climatica"));
@@ -120,7 +119,8 @@ public class ImportadorTiming {
         boolean enProceso = "en proceso".equals(disp);
         ObjectNode datos = TimingPostgres.inicial(responsable).put("tecnico", tecnico)
                 .put("responsableOrigen", nombreResponsable).put("tecnicoOrigen", nombreTecnico)
-                .put("proyectoId", proyecto).put("proyecto", nombreProyecto).put("cuenta", cuenta)
+                .put("proyectoOrigen", nombreProyecto).put("cuentaOrigen", cuenta)
+                .put("proyectoId", (Long) null).put("proyecto", nombreProyecto).put("cuenta", cuenta)
                 .put("tipo", valor(fila, "EGM/HEATERS")).put("descripcion", valor(fila, "Tarea"))
                 .put("ruta", valor(fila, "Ruta")).put("otrosEquipos", valor(fila, "Otros equipos necesarios"))
                 .put("piezasCodigo", valor(fila, "Códigos")).put("piezasCantidad", decimal(fila, "Nº Piezas"))
@@ -128,6 +128,14 @@ public class ImportadorTiming {
                 .put("horasEstimadas", decimal(fila, "Tiempo estimado de tarea (h)"))
                 .put("fechaCierre", fecha(fila, "Fecha Fin", id, avisos))
                 .put("fechaEnsayo", fecha(fila, "Fecha programada del ensayo", id, avisos));
+        if (proyecto != null) {
+            VinculacionTiming.ponerProyecto(datos, proyecto, cuenta);
+        }
+        // Orden diario del técnico tal cual (0, 1, 2… primero; 9 por defecto; 99 genéricas y ausencias).
+        BigDecimal ordenDiario = decimal(fila, "OrdenDIario");
+        if (ordenDiario != null) {
+            datos.put("ordenDiario", ordenDiario);
+        }
         ObjectNode legado = datos.putObject("legado");
         fila.forEach(legado::put);
         if (!nombreResponsable.isEmpty() && responsable.isEmpty()) aviso(avisos, id, "Responsable sin correspondencia.");
@@ -158,7 +166,15 @@ public class ImportadorTiming {
     }
 
     private static String valor(Map<String, String> fila, String campo) {
-        return fila.getOrDefault(campo, "").strip();
+        String v = fila.get(campo);
+        if (v == null) {
+            // Cabeceras con otras mayúsculas (OrdenDIario / OrdenDiario).
+            for (Map.Entry<String, String> e : fila.entrySet()) {
+                if (e.getKey().equalsIgnoreCase(campo)) return e.getValue() == null ? "" : e.getValue().strip();
+            }
+            return "";
+        }
+        return v.strip();
     }
 
     private static String fecha(Map<String, String> fila, String campo, long id, ArrayNode avisos) {
@@ -193,45 +209,43 @@ public class ImportadorTiming {
                 .replaceAll("\\p{M}", "").replaceAll("\\s+", " ").toLowerCase(Locale.ROOT);
     }
 
-    private record Proyecto(long id, String nombre, String cuenta) {
-    }
-
+    /** Personas y proyectos (con las correspondencias manuales) y el catálogo de equipos de Timing R&T. */
     private static final class Referencias {
-        private final Map<String, Set<String>> usuarios = new HashMap<>();
-        private final Map<String, List<Proyecto>> porCuenta = new HashMap<>();
-        private final Map<String, List<Proyecto>> porTitulo = new HashMap<>();
+        private final VinculacionTiming.Referencias vinculos;
         private final Map<String, String> equipos = new HashMap<>();
         private final Map<String, Set<String>> nuevos = new HashMap<>();
+        /** origen_id → {proyectoId, clave del proyecto del Excel} de las tareas ya vinculadas. */
+        private final Map<Long, String[]> vinculados = new HashMap<>();
 
         private Referencias(BaseDatos bd) {
-            bd.jdbc().query("SELECT email, titulo, nombre_responsable FROM usuario", (ResultSet rs) -> {
-                String email = rs.getString(1);
-                for (String alias : List.of(email, rs.getString(2), rs.getString(3) == null ? "" : rs.getString(3))) {
-                    if (!alias.isBlank()) usuarios.computeIfAbsent(clave(alias),
-                            k -> new LinkedHashSet<>()).add(email);
-                }
-            });
-            bd.jdbc().query("SELECT id, titulo, coalesce(numero_proyecto, '') FROM proyecto", (ResultSet rs) -> {
-                Proyecto p = new Proyecto(rs.getLong(1), rs.getString(2), rs.getString(3));
-                porTitulo.computeIfAbsent(clave(p.nombre()), k -> new ArrayList<>()).add(p);
-                if (!p.cuenta().isBlank()) porCuenta.computeIfAbsent(p.cuenta(), k -> new ArrayList<>()).add(p);
-            });
+            vinculos = new VinculacionTiming.Referencias(bd);
+            bd.jdbc().query("SELECT origen_id, datos->>'proyectoId', coalesce(datos->>'proyectoOrigen', ''), "
+                    + "coalesce(datos->>'cuentaOrigen', '') FROM timing_tarea WHERE origen_id IS NOT NULL "
+                    + "AND coalesce(datos->>'proyectoId', '') NOT IN ('', '0') AND (datos ? 'proyectoOrigen' OR datos ? 'cuentaOrigen')",
+                    (ResultSet rs) -> {
+                        vinculados.put(rs.getLong(1), new String[]{rs.getString(2),
+                                VinculacionTiming.claveProyecto(rs.getString(3), rs.getString(4))});
+                    });
             bd.jdbc().query("SELECT clase, nombre FROM timing_equipo", (ResultSet rs) -> {
                 equipos.put(rs.getString(1) + "/" + clave(rs.getString(2)), rs.getString(2));
             });
         }
 
         private String email(String nombre) {
-            Set<String> coincidencias = usuarios.getOrDefault(clave(nombre), Set.of());
-            return coincidencias.size() == 1 ? coincidencias.iterator().next() : "";
+            return vinculos.email(nombre);
         }
 
-        private Long proyecto(String nombre, String cuenta) {
-            List<Proyecto> titulos = porTitulo.getOrDefault(clave(nombre), List.of());
-            List<Proyecto> exactos = titulos.stream().filter(p -> p.cuenta().equals(cuenta)).toList();
-            if (exactos.size() == 1) return exactos.get(0).id();
-            List<Proyecto> coincidencias = porCuenta.getOrDefault(cuenta, List.of());
-            return titulos.isEmpty() && coincidencias.size() == 1 ? coincidencias.get(0).id() : null;
+        /**
+         * Proyecto del catálogo para el nombre y número del Excel. Si ya no coincide
+         * (el proyecto se ha renombrado o cambiado de número en TestBenchPlanner) y la
+         * tarea ya estaba vinculada desde ese mismo origen, conserva ese vínculo.
+         */
+        private VinculacionTiming.Proyecto proyecto(long origenId, String nombre, String cuenta) {
+            VinculacionTiming.Proyecto p = vinculos.proyecto(nombre, cuenta);
+            if (p != null) return p;
+            String[] previo = vinculados.get(origenId);
+            if (previo == null || !VinculacionTiming.claveProyecto(nombre, cuenta).equals(previo[1])) return null;
+            return vinculos.proyectoPorId(Long.parseLong(previo[0]));
         }
 
         private String equipo(String clase, String nombre) {

@@ -230,10 +230,20 @@ recompilar la interfaz sin instalar nada: `mvnw.cmd -Pinterfaz clean verify`
   confirmación, como hoy (D10): guarda primero la configuración (protección D11:
   si la rechaza no se toca nada), después los ensayos y por último el calendario
   de este PC. Un fichero sin `benches` devuelve 400 «Invalid file».
-- **📤 Export read-only** (Admin, barra superior): pregunta si se guarda antes la
-  foto semanal y descarga la página 4.9.4 (`/clasico`) con el estado y las
-  aprobaciones incrustados, como `exportReadOnly` (D31). El fichero se abre sin
-  backend y en solo lectura.
+- **📤 Export read-only** (Admin, barra superior): actualiza antes, sin preguntar,
+  la foto semanal de KPI (`origen=export`, D64) y descarga un único .html con **la interfaz nueva** (su JS, CSS e
+  imágenes dentro) y los datos de **Thermal Benches** incrustados en
+  `window.__TBP_FOTO__` (D63). Se abre sin backend: `api/foto.ts` responde a las
+  peticiones con lo incrustado y rechaza cualquier escritura. Los KPI, la
+  ocupación y By Responsible salen de `GET /api/v1/indicadores/foto-solo-lectura`
+  (banco a banco y semana a semana, `FotoSoloLectura`), que la foto suma con el
+  filtro Org y el responsable elegidos. Solo Dashboard, By Responsible, KPI
+  History y los bancos térmicos; sin usuarios ni otras áreas.
+- **Foto semanal de KPI** (D64): 📊 Update Yearly Status la guarda al momento; con
+  PostgreSQL, `FotoSemanalAutomatica` (`@Scheduled`, `planner.kpi.foto-automatica`,
+  por defecto 23:55 cada noche, hora de Madrid) la vuelve a guardar y la del domingo
+  cierra la semana. `GET /api/v1/indicadores/estado-fotos` da, por semana, cuándo y
+  cómo se tomó la última foto y si está en curso, cerrada o provisional.
 - En solo lectura se pueden exportar Excel, CSV y copia JSON (son consultas);
   importar está desactivado y el backend lo rechaza con 403.
 

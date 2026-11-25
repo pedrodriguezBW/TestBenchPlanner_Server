@@ -65,9 +65,35 @@ public class TimingController {
         return timing.operar(acceso(), id, accion, cuerpo);
     }
 
+    /** Panel «Orden diario» del coordinador: {tecnico, tareas: [{id, version, ordenDiario}]}. */
+    @PostMapping("/orden-diario")
+    public ObjectNode ordenarCola(@RequestBody JsonNode cuerpo) {
+        return timing.ordenarCola(acceso(), cuerpo);
+    }
+
     @PutMapping("/equipos")
     public ObjectNode equipo(@RequestBody JsonNode cuerpo) {
         return timing.guardarEquipo(acceso(), cuerpo);
+    }
+
+    @GetMapping("/vinculacion")
+    public ObjectNode sinVincular() {
+        return timing.sinVincular(acceso());
+    }
+
+    @PostMapping("/vinculacion")
+    public ObjectNode vincular() {
+        return timing.vincular(acceso());
+    }
+
+    @PostMapping("/vinculos")
+    public ObjectNode guardarVinculo(@RequestBody JsonNode cuerpo) {
+        return timing.guardarVinculo(acceso(), cuerpo);
+    }
+
+    @PostMapping("/vinculos/borrar")
+    public ObjectNode borrarVinculo(@RequestBody JsonNode cuerpo) {
+        return timing.borrarVinculo(acceso(), cuerpo);
     }
 
     @PostMapping(value = "/importacion", consumes = "multipart/form-data")

@@ -1,9 +1,20 @@
 import type {
-  Aprobacion, AreaGestion, DatosAprobacion, EstadoCuenta, BancoCatalogo, Conectado, BloquesKpi, CalendarioPc, FilaActividad, Recurso, Recursos, UsuarioLista, FilaEnConflicto, FilaEstadistica, FotoSemanal, Historico, PropuestaCierre, RespuestaOperacion, Sesion, TablaOcupacion,
+  Aprobacion, AreaGestion, DatosAprobacion, EstadoCuenta, BancoCatalogo, Conectado, BloquesKpi, CalendarioPc, EstadoFotoSemana, FilaActividad, Recurso, Recursos, UsuarioLista, FilaEnConflicto, FilaEstadistica, FotoSemanal, Historico, PropuestaCierre, RespuestaOperacion, Sesion, TablaOcupacion,
   Tendencia, TipoOperacion, ValidacionCierre, ValoresCierre, Vista,
 } from './tipos';
 import { codigoPestana } from '../estado/cicloDeVida';
 import { segundosInactivo } from '../estado/actividad';
+import { ErrorFoto, fotoActiva, responderFoto } from './foto';
+
+/** Proyecto del catálogo en el servidor: etiqueta «número - nombre», nombre y número por separado. */
+export interface FichaProyecto {
+  id: number;
+  label: string;
+  name: string;
+  number: string;
+  /** El nombre todavía lleva el número delante (proyecto sin separar). */
+  numberInName?: boolean;
+}
 
 /*
  * Cliente de la API del backend. Traduce los códigos HTTP a errores con
@@ -46,6 +57,16 @@ export class ErrorSinConexion extends Error {
 }
 
 export async function peticion<T>(metodo: string, ruta: string, cuerpo?: unknown): Promise<T> {
+  // 📤 Foto de solo lectura: no hay servidor; responde con los datos incrustados.
+  const foto = fotoActiva();
+  if (foto) {
+    try {
+      return responderFoto(foto, metodo, ruta, cuerpo) as T;
+    } catch (e) {
+      if (e instanceof ErrorFoto) throw new ErrorApi(e.estado, e.codigo, e.message);
+      throw e;
+    }
+  }
   let respuesta: Response;
   try {
     // El código de la pestaña permite al backend descartar sus consultas si se recarga o se cierra.
@@ -97,9 +118,13 @@ export const api = {
   presencia: () => peticion<{ me: string; online: Conectado[] }>('POST', '/api/v1/presencia', {}),
   version: () => peticion<{ backend: string; published: string }>('GET', '/api/v1/version'),
   planificacion: () => peticion<Vista>('GET', '/api/v1/planificacion'),
-  catalogos: () => peticion<{ projects: string[]; responsibles: string[]; benches?: BancoCatalogo[]; projectOrders?: Record<string, string>; projectNumbers?: Record<string, string>; areaNames?: Record<string, string> }>('GET', '/api/v1/catalogos'),
+  catalogos: () => peticion<{ projects: string[]; responsibles: string[]; benches?: BancoCatalogo[]; projectOrders?: Record<string, string>; projectNumbers?: Record<string, string>; projectItems?: FichaProyecto[]; areaNames?: Record<string, string> }>('GET', '/api/v1/catalogos'),
   guardarNumeroProyecto: (proyecto: string, numero: string, anterior: string) =>
     peticion<{ ok: boolean }>('PUT', '/api/v1/proyectos/numero', { proyecto, numero, anterior }),
+  /** Nombre y número de un proyecto (servidor): actualiza ensayos y tareas de Timing R&T que lo usan. */
+  editarProyecto: (id: number, nombre: string, numero: string, anteriorNombre: string, anteriorNumero: string) =>
+    peticion<{ ok: boolean; label: string; name: string; number: string; tests: number; timingTasks: number }>('PUT',
+      '/api/v1/proyectos/editar', { id, nombre, numero, anteriorNombre, anteriorNumero }),
   usuarios: () => peticion<UsuarioLista[]>('GET', '/api/v1/usuarios'),
 
   editarCampos: (banco: string, id: string, cambios: CambioCampo[], version: string | null, forzar = false) =>
@@ -148,7 +173,9 @@ export const api = {
     peticion<TablaOcupacion>('GET', `/api/v1/indicadores/tabla-ocupacion?desde=${desde}&hasta=${hasta}&org=${enc(org)}`),
   tendencia: (cwDesde: number, cwHasta: number, org: string) =>
     peticion<Tendencia>('GET', `/api/v1/indicadores/tendencia?cwDesde=${cwDesde}&cwHasta=${cwHasta}&org=${enc(org)}`),
-  fotoSemanal: () => peticion<FotoSemanal[]>('POST', '/api/v1/indicadores/foto-semanal'),
+  fotoSemanal: (origen: 'manual' | 'export' = 'manual') =>
+    peticion<FotoSemanal[]>('POST', `/api/v1/indicadores/foto-semanal?origen=${origen}`),
+  estadoFotos: (org: string) => peticion<EstadoFotoSemana[]>('GET', `/api/v1/indicadores/estado-fotos?org=${enc(org)}`),
 
   // Exportaciones e importación (bloque F)
   exportarGantt: (matriz: unknown) => peticion<{ ok: boolean; b64?: string; filename?: string; error?: string }>('POST', '/api/v1/exportaciones/gantt', matriz),
@@ -164,7 +191,7 @@ export const api = {
   /** projectOrders: orden contable por proyecto (solo Admin); si no se envía, se conservan las guardadas. */
   guardarCatalogos: (projects: string[], benches: BancoCatalogo[], projectOrders?: Record<string, string>) =>
     peticion<{ ok: boolean }>('PUT', '/api/v1/catalogos', projectOrders ? { projects, benches, projectOrders } : { projects, benches }),
-  guardarUsuarios: (users: UsuarioLista[]) => peticion<{ ok: boolean }>('PUT', '/api/v1/usuarios', { users }),
+  guardarUsuarios: (users: UsuarioLista[]) => peticion<{ ok: boolean; timingVinculadas?: number }>('PUT', '/api/v1/usuarios', { users }),
   // Cuentas del modo servidor (hito S3, solo Admin)
   cuentas: () => peticion<EstadoCuenta[]>('GET', '/api/v1/cuentas'),
   claveTemporal: (email: string) => peticion<{ ok: boolean; email: string; clave: string }>('POST', '/api/v1/cuentas/clave-temporal', { email }),

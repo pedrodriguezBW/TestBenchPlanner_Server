@@ -1,6 +1,7 @@
 import { api } from '../../api/cliente';
 import { usePanel } from '../../estado/Panel';
 import { usePlanificador } from '../../estado/Planificador';
+import { esFoto } from '../../api/foto';
 import { fmt, semanaIso, sumarDias } from '../../utilidades/fechas';
 import { colorEstado } from '../../utilidades/textos';
 import { BloquesKpi } from './BloquesKpi';
@@ -17,7 +18,9 @@ import { etiquetaFiltro } from '../../utilidades/areas';
  * gráfica de ocupación por CW y tabla de ocupación por tipo de banco.
  */
 export function VistaDashboard() {
-  const { vista, mostrarMensaje, soloLectura } = usePlanificador();
+  const { vista, mostrarMensaje, soloLectura, sesion } = usePlanificador();
+  // D64: en el servidor (PostgreSQL) la foto también se actualiza sola cada noche.
+  const automatica = !!sesion?.modoServidor;
   const { semana, zoom, setZoom, organizacion, setOrganizacion } = usePanel();
   if (!vista) return null;
 
@@ -25,7 +28,8 @@ export function VistaDashboard() {
     try {
       const fotos = await api.fotoSemanal();
       const f = fotos[0];
-      mostrarMensaje(`Yearly status updated: KPIs for CW${f?.cw ?? ''} (${f?.year ?? ''}) saved to the annual history (ALL / BW / CTAG and by area). Syncing to SharePoint\u2026`);
+      mostrarMensaje(`Yearly status updated: KPIs for CW${f?.cw ?? ''} (${f?.year ?? ''}) saved to the annual history (ALL / BW / CTAG and by area). `
+        + (automatica ? 'The server refreshes it again every night and closes the week on Sunday night.' : 'Syncing to SharePoint\u2026'));
     } catch (e) {
       mostrarMensaje(e instanceof Error ? e.message : String(e));
     }
@@ -42,9 +46,9 @@ export function VistaDashboard() {
       <div className="view-head">
         <NavegacionSemana activarZoom>
           <SelectorOrganizacion valor={organizacion} onCambiar={setOrganizacion} />
-          <button className="btn ghost sm" disabled={soloLectura} onClick={() => void fotoSemanal()} title="Freeze this week's KPIs (ALL / BW / CTAG and by area) into the annual history">
+          {!esFoto() && <button className="btn ghost sm" disabled={soloLectura} onClick={() => void fotoSemanal()} title={automatica ? 'Save this week\u2019s KPIs now (ALL / BW / CTAG and by area). The server also refreshes them every night and closes the week on Sunday night.' : 'Freeze this week\u2019s KPIs (ALL / BW / CTAG and by area) into the annual history'}>
             &#128202; Update Yearly Status
-          </button>
+          </button>}
         </NavegacionSemana>
       </div>
       <BloquesKpi />

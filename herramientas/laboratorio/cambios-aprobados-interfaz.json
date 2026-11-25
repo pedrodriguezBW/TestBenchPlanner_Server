@@ -36,5 +36,10 @@
   "ruta": "^/hints/1$",
   "referencia": "Elige un proyecto para resaltarlo (el resto se atenúa). Arrastra el borde de la 1ª columna para ensancharla.",
   "motivo": "D40 (Gantt general rediseñado, H8): el texto de ayuda del Gantt del Dashboard explica la tarjeta al pasar el ratón en lugar del foco (el foco tiene ahora su propia ficha)."
+ },
+ {
+  "caso": "^UF16-",
+  "ruta": "incrustado",
+  "motivo": "D63: la foto de solo lectura ya no es la página 4.9.4 con el estado incrustado sino la interfaz nueva con window.__TBP_FOTO__ (solo Thermal Benches)."
  }
 ]

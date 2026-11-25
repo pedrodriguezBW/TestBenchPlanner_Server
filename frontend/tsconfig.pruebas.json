@@ -13,6 +13,7 @@
     "src/estado/colaConfiguracion.ts",
     "src/utilidades/ganttModerno.ts",
     "src/bloques/timing/modelo.ts",
+    "src/bloques/configuracion/nombresProyecto.ts",
     "src/api/tipos.ts"
   ]
 }

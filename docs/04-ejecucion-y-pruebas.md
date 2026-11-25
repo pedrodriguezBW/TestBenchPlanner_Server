@@ -230,9 +230,11 @@ En modo local como Admin, comparando con `/clasico`:
   `mvnw.cmd clean verify -Dtbp.pruebas.postgresql.url=jdbc:postgresql://127.0.0.1:5432/postgres -Dtbp.pruebas.postgresql.clave=<clave de postgres>`.
 - Instalar la base en el servidor, exportar desde SharePoint e importar:
   `docs/10-servidor-postgresql.md`, apartado 5 (scripts en `scripts/servidor/`).
-- Prueba manual mínima: `importar-en-postgresql.cmd <carpeta> simular` → resultado
-  SIMULADO y verificación «ok: true»; después sin `simular` → IMPORTADO; repetirlo
-  → todas las tablas con 0 cambios; arrancar con el perfil `postgresql` y
+- Prueba manual mínima: `importar-en-postgresql.cmd <base> <sharepoint>` (simula) →
+  resultado SIMULADO, `comprobacionBase.verificada: true` y verificación «ok: true»;
+  después con `aplicar` → IMPORTADO; repetirlo con BASE = `<sharepoint>` y una
+  exportación nueva sin cambios en SharePoint → 0 cambios
+  (la importación sin base se retiró en D65); arrancar con el perfil `postgresql` y
   comprobar en la interfaz que se ve lo mismo que con SharePoint.
 
 

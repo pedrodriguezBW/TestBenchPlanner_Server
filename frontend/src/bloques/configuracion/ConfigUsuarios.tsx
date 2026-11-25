@@ -59,9 +59,11 @@ export function ConfigUsuarios() {
     setUsuarios(lista);
     setEstado('Guardando...');
     try {
-      await api.guardarUsuarios(lista.map((u) => ({ title: u.title, email: u.email, role: rolGuardado(u.role),
+      const r = await api.guardarUsuarios(lista.map((u) => ({ title: u.title, email: u.email, role: rolGuardado(u.role),
         responsibleName: u.responsibleName, timingRoles: gestionaCuentas && u.email === perfilEditado ? u.timingRoles : undefined })));
-      setEstado(modoServidor ? 'Guardado.' : 'Guardado en SharePoint.');
+      const vinculadas = r?.timingVinculadas ?? 0;
+      setEstado((modoServidor ? 'Guardado.' : 'Guardado en SharePoint.')
+        + (vinculadas ? ` ${vinculadas === 1 ? '1 tarea' : vinculadas + ' tareas'} de Timing R&T vinculada${vinculadas === 1 ? '' : 's'}.` : ''));
       await recargarListas();
       leerCuentas();
     } catch (e) {

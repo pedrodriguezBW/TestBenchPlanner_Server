@@ -40,6 +40,10 @@ import java.util.Set;
  *    sirve para ver qué cambiaría.
  *  - Cada cambio queda en la auditoría con operación IMPORTACION. El registro de
  *    actividad solo se AÑADE (nunca se borra lo anotado en la base).
+ *  - D65: las tablas que solo existen en el servidor (Timing R&T, cuentas,
+ *    horarios, calendario) no están en la exportación. Se bloquean durante la
+ *    importación y, si al terminar han cambiado en algo (p. ej. al borrar un
+ *    usuario se irían sus perfiles de Timing), se deshace todo (RECHAZADO).
  */
 public class ImportadorDatos {
 
@@ -52,6 +56,26 @@ public class ImportadorDatos {
     static final List<String> TABLAS = List.of("credencial", "horario_ensayo", "ensayo", "auditoria", "registro_actividad", "responsable", "proyecto", "banco",
             "nombre_area", "configuracion_app", "usuario", "recurso", "bloqueo_recurso", "kpi_semana", "aprobacion",
             "tipo_equipo", "presencia", "festivo", "calendario");
+
+    /**
+     * D65: tablas solo del servidor que la importación NUNCA puede cambiar, con
+     * las columnas que se comparan (en credencial, solo email y contraseña: el
+     * último acceso puede cambiar mientras se simula con el servicio en marcha).
+     */
+    static final Map<String, String> TABLAS_DEL_SERVIDOR = tablasDelServidor();
+
+    private static Map<String, String> tablasDelServidor() {
+        Map<String, String> t = new LinkedHashMap<>();
+        t.put("credencial", "t.email, t.hash");
+        for (String tabla : List.of("timing_perfil", "timing_equipo", "timing_tarea", "timing_avance", "timing_historial",
+                "timing_vinculo", "horario_ensayo", "festivo", "calendario")) {
+            t.put(tabla, "t.*");
+        }
+        return java.util.Collections.unmodifiableMap(t);
+    }
+
+    /** Clave de configuracion_app con la exportación de SharePoint importada la última vez (D65). */
+    static final String CLAVE_ULTIMA_EXPORTACION = "migracion.ultima-exportacion";
 
     private final BaseDatos bd;
     private final VerificacionParidad verificacion;
@@ -84,8 +108,17 @@ public class ImportadorDatos {
         try {
             bd.enTransaccion(() -> {
                 bloquearTodo();
+                bd.jdbc().execute("LOCK TABLE " + String.join(", ", TABLAS_DEL_SERVIDOR.keySet()) + " IN SHARE MODE");
+                Map<String, String> antes = huellasDelServidor();
                 cargar(datos, tablas, avisos);
-                List<String> diferencias = verificacion.comparar(carpeta);
+                List<String> diferencias = new ArrayList<>(verificacion.comparar(carpeta));
+                Map<String, String> despues = huellasDelServidor();
+                for (String tabla : TABLAS_DEL_SERVIDOR.keySet()) {
+                    if (!Objects.equals(antes.get(tabla), despues.get(tabla))) {
+                        diferencias.add("la importación cambiaría la tabla del servidor «" + tabla
+                                + "», que no viene de SharePoint (p. ej. al borrar un usuario se borran sus perfiles de Timing)");
+                    }
+                }
                 ObjectNode v = informe.putObject("verificacion").put("ok", diferencias.isEmpty());
                 ArrayNode lista = v.putArray("diferencias");
                 diferencias.forEach(lista::add);
@@ -121,6 +154,162 @@ public class ImportadorDatos {
         });
     }
 
+    /** Huella MD5 del contenido de cada tabla del servidor (D65). */
+    private Map<String, String> huellasDelServidor() {
+        Map<String, String> h = new LinkedHashMap<>();
+        for (Map.Entry<String, String> t : TABLAS_DEL_SERVIDOR.entrySet()) {
+            h.put(t.getKey(), bd.jdbc().queryForObject("SELECT md5(coalesce(string_agg(x.fila, '|' ORDER BY x.fila), '')) FROM "
+                    + "(SELECT ROW(" + t.getValue() + ")::text AS fila FROM " + t.getKey() + " t) x", String.class));
+        }
+        return h;
+    }
+
+    // ---- D65: protección de lo creado en el servidor y comprobación de la base común --------
+
+    /**
+     * Elementos que la fusión de tres vías nunca borra aunque falten en SharePoint
+     * (o la resolución diga «borrar»): usuarios con perfil de Timing R&T o con
+     * cuenta, y proyectos que usan las tareas o las correspondencias de Timing.
+     * Clave: «fichero#ruta» de la lista (como en FusionTresVias.claveDeLista).
+     */
+    public Map<String, Set<String>> protegidos() {
+        Set<String> usuarios = new LinkedHashSet<>();
+        bd.jdbc().queryForList("SELECT lower(email) FROM timing_perfil UNION SELECT lower(email) FROM credencial", String.class)
+                .forEach(usuarios::add);
+        Set<String> proyectos = new LinkedHashSet<>();
+        bd.jdbc().query("SELECT p.titulo, p.numero_proyecto FROM proyecto p WHERE p.id::text IN "
+                        + "(SELECT datos->>'proyectoId' FROM timing_tarea WHERE datos->>'proyectoId' IS NOT NULL) "
+                        + "OR p.titulo IN (SELECT destino FROM timing_vinculo WHERE tipo = 'proyecto')",
+                (java.sql.ResultSet rs) -> {
+                    while (rs.next()) {
+                        proyectos.add(NombresProyecto.etiqueta(rs.getString(1), rs.getString(2)));
+                    }
+                    return null;
+                });
+        Map<String, Set<String>> salida = new LinkedHashMap<>();
+        salida.put("usuarios.json#", usuarios);
+        salida.put("configuracion.json#projects", proyectos);
+        return salida;
+    }
+
+    /**
+     * ¿Es «base» la exportación con la que se cargó la base de datos? (D65)
+     *
+     *  - Si la base ya guardó la exportación de su última fusión (registrarExportacion),
+     *    la carpeta tiene que ser esa misma (huellas SHA-256 iguales).
+     *  - Si no (base cargada antes de D65), se compara cada ensayo de la carpeta con
+     *    lo que dejó la última importación según la auditoría.
+     *
+     * Devuelve {"verificada": bool, "metodo": ..., "detalle": ..., ...recuentos}.
+     */
+    public ObjectNode comprobarBase(Path base) {
+        CarpetaExportacion carpeta = new CarpetaExportacion(base);
+        ObjectNode r = JsonJs.objetoVacio();
+        List<String> guardada = bd.jdbc().queryForList("SELECT valor FROM configuracion_app WHERE clave = ?", String.class,
+                CLAVE_ULTIMA_EXPORTACION);
+        if (!guardada.isEmpty()) {
+            r.put("metodo", "exportación registrada en la última fusión");
+            JsonNode registro = JsonJs.leerObjeto(guardada.get(0));
+            r.set("esperada", registro.deepCopy());
+            JsonNode manifiesto = carpeta.existe(CarpetaExportacion.MANIFIESTO)
+                    ? carpeta.leer(CarpetaExportacion.MANIFIESTO, JsonJs.objetoVacio()) : JsonJs.objetoVacio();
+            boolean igual = !registro.path("ficheros").isEmpty()
+                    && registro.path("ficheros").equals(manifiesto.path("ficheros"));
+            r.put("verificada", igual);
+            r.put("detalle", igual ? "La carpeta base es la exportación de SharePoint importada la última vez ("
+                    + registro.path("fecha").asText() + ")."
+                    : "La carpeta base NO es la exportación de SharePoint importada la última vez (" + registro.path("fecha").asText()
+                    + ", " + registro.path("carpeta").asText() + "). Usa esa carpeta como base.");
+            return r;
+        }
+        r.put("metodo", "auditoría de la última importación (ensayos)");
+        Map<String, String> importados = new HashMap<>();
+        bd.jdbc().query("SELECT DISTINCT ON (clave) clave, despues FROM auditoria WHERE entidad = 'ensayo' AND operacion = ? "
+                + "ORDER BY clave, id DESC", (java.sql.ResultSet rs) -> {
+                    while (rs.next()) {
+                        if (rs.getString(2) != null) {
+                            importados.put(rs.getString(1), rs.getString(2));
+                        }
+                    }
+                    return null;
+                }, Auditoria.IMPORTACION);
+        Map<String, String> enBase = new LinkedHashMap<>();
+        for (JsonNode fila : carpeta.leer("planner.json", JsonJs.mapper().createArrayNode())) {
+            String uid = fila.path("uid").asText("");
+            JsonNode data = fila.get("data");
+            if (!uid.isEmpty() && data != null && !data.isNull()) {
+                enBase.putIfAbsent(uid, data.isTextual() ? data.textValue() : JsonJs.escribir(data));
+            }
+        }
+        int iguales = 0, distintos = 0, soloEnBase = 0;
+        ArrayNode ejemplos = JsonJs.mapper().createArrayNode();
+        for (Map.Entry<String, String> e : enBase.entrySet()) {
+            String importado = importados.remove(e.getKey());
+            if (importado == null) {
+                soloEnBase++;
+                anadirEjemplo(ejemplos, "solo en la carpeta base: " + e.getKey());
+            } else if (mismoJson(importado, e.getValue())) {
+                iguales++;
+            } else {
+                distintos++;
+                anadirEjemplo(ejemplos, "distinto de lo importado: " + e.getKey());
+            }
+        }
+        int soloImportados = importados.size();
+        importados.keySet().forEach(uid -> anadirEjemplo(ejemplos, "importado pero no está en la carpeta base: " + uid));
+        r.put("ensayosIguales", iguales).put("ensayosDistintos", distintos).put("soloEnBase", soloEnBase)
+                .put("soloImportados", soloImportados);
+        r.set("ejemplos", ejemplos);
+        boolean sinRastro = iguales == 0 && distintos == 0 && soloImportados == 0;
+        boolean ok = !sinRastro && distintos == 0 && soloEnBase == 0 && soloImportados == 0;
+        r.put("verificada", ok);
+        String detalle;
+        if (ok) {
+            detalle = "Los " + iguales + " ensayos de la carpeta base son exactamente los que se importaron.";
+        } else if (sinRastro) {
+            detalle = "No hay rastro de la importación en la auditoría: no se puede comprobar la carpeta base.";
+        } else {
+            detalle = "La carpeta base no coincide con la importación: " + distintos + " ensayos distintos, " + soloEnBase
+                    + " que no se importaron y " + soloImportados + " importados que no están en ella ("
+                    + iguales + " iguales).";
+        }
+        r.put("detalle", detalle);
+        return r;
+    }
+
+    private static void anadirEjemplo(ArrayNode ejemplos, String texto) {
+        if (ejemplos.size() < 20) {
+            ejemplos.add(texto);
+        }
+    }
+
+    private static boolean mismoJson(String a, String b) {
+        if (Objects.equals(a, b)) {
+            return true;
+        }
+        try {
+            return JsonJs.mapper().readTree(a).equals(JsonJs.mapper().readTree(b));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            return false;
+        }
+    }
+
+    /** Tras una fusión aplicada: guarda qué exportación de SharePoint se importó (será la base la próxima vez). */
+    public void registrarExportacion(Path carpeta, ObjectNode manifiesto) {
+        ObjectNode registro = JsonJs.objetoVacio();
+        registro.put("fecha", manifiesto.path("fecha").asText(""));
+        registro.put("carpeta", carpeta.toAbsolutePath().toString());
+        registro.put("importadaEn", java.time.Instant.now().toString());
+        registro.set("ficheros", manifiesto.path("ficheros").deepCopy());
+        bd.enTransaccion(() -> {
+            bd.jdbc().update("INSERT INTO configuracion_app (clave, valor) VALUES (?, ?) ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor",
+                    CLAVE_ULTIMA_EXPORTACION, JsonJs.escribir(registro));
+            Auditoria.anotar(bd, IMPORTACION, "configuracion_app", CLAVE_ULTIMA_EXPORTACION, Auditoria.MODIFICACION, null,
+                    JsonJs.escribir(registro));
+            return null;
+        });
+    }
+
     private void bloquearTodo() {
         for (String recurso : List.of("importacion", "catalogos", "usuarios", "recursos", "kpi", "tipos-equipo")) {
             bd.bloquear(recurso);
@@ -133,9 +322,10 @@ public class ImportadorDatos {
         tablas.set("responsables", Reconciliador.reconciliar(bd, "responsable", "nombre", List.of("seq"),
                 titulos(cfg.path("responsibles"), "nombre", null, avisos, "responsables"), true, "responsable", IMPORTACION,
                 Auditoria.IMPORTACION).json());
-        tablas.set("proyectos", Reconciliador.reconciliar(bd, "proyecto", "titulo", List.of("seq", "orden_facturacion"),
-                titulos(cfg.path("projects"), "titulo", cfg.path("projectOrders"), avisos, "proyectos"), true, "proyecto",
-                IMPORTACION, Auditoria.IMPORTACION).json());
+        tablas.set("proyectos", Reconciliador.reconciliar(bd, "proyecto", "titulo",
+                List.of("seq", "orden_facturacion", "numero_proyecto"),
+                separarNumeros(titulos(cfg.path("projects"), "titulo", cfg.path("projectOrders"), avisos, "proyectos")), true,
+                "proyecto", IMPORTACION, Auditoria.IMPORTACION).json());
         tablas.set("bancos", Reconciliador.reconciliar(bd, "banco", "nombre",
                 List.of("group_key", "group_name", "dot", "org", "seq", "tipo_equipo", "area"), bancos(cfg.path("benches"), avisos),
                 true, "banco", IMPORTACION, Auditoria.IMPORTACION).json());
@@ -257,6 +447,39 @@ public class ImportadorDatos {
             filas.add(f);
         }
         return sinRepetidos(filas, columna, avisos, que);
+    }
+
+    /**
+     * Proyectos de SharePoint «80001755 - Nombre»: en el servidor el nombre va sin
+     * número (columna numero_proyecto). Solo se separa la forma exacta, para que
+     * la etiqueta pública siga siendo el título de SharePoint y los ensayos, las
+     * órdenes de facturación y la verificación no cambien. Si el nombre quedaría
+     * igual que el de otro proyecto, se deja el título entero (la pantalla de
+     * proyectos lo marca para corregirlo).
+     */
+    static List<Map<String, Object>> separarNumeros(List<Map<String, Object>> filas) {
+        Map<String, Integer> usos = new HashMap<>();
+        java.util.Set<String> titulos = new java.util.HashSet<>();
+        for (Map<String, Object> f : filas) {
+            String titulo = (String) f.get("titulo");
+            titulos.add(titulo);
+            NombresProyecto.Partes p = NombresProyecto.separarExacto(titulo);
+            if (p != null) {
+                usos.merge(p.nombre(), 1, Integer::sum);
+            }
+        }
+        List<Map<String, Object>> salida = new ArrayList<>();
+        for (Map<String, Object> f : filas) {
+            Map<String, Object> copia = new LinkedHashMap<>(f);
+            String titulo = (String) f.get("titulo");
+            NombresProyecto.Partes p = NombresProyecto.separarExacto(titulo);
+            if (p != null && usos.get(p.nombre()) == 1 && !titulos.contains(p.nombre())) {
+                copia.put("titulo", p.nombre());
+                copia.put("numero_proyecto", p.numero());
+            }
+            salida.add(copia);
+        }
+        return salida;
     }
 
     private static List<Map<String, Object>> bancos(JsonNode lista, ArrayNode avisos) {

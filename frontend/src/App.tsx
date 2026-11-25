@@ -1,7 +1,9 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from './api/cliente';
+import { useConservarScroll } from './estado/useConservarScroll';
 import { VistaBanco } from './bloques/banco/VistaBanco';
 import { exportarSoloLectura } from './bloques/exportaciones/descargas';
+import { fotoActiva } from './api/foto';
 import { VistaDashboard } from './bloques/panel/VistaDashboard';
 import { VistaResponsable } from './bloques/panel/VistaResponsable';
 import { VistaKpiHistorico } from './bloques/kpi/VistaKpiHistorico';
@@ -26,6 +28,7 @@ import { useColaConfiguracion } from './estado/useColaConfiguracion';
 import { TIPOS_DE_ENSAYO } from './utilidades/textos';
 import { codigosArea, nombresArea, normalizarArea, type CodigoArea } from './utilidades/areas';
 import { usePreferencia } from './utilidades/preferencias';
+import { dia, fmt, semanaIso } from './utilidades/fechas';
 import type { Vista } from './api/tipos';
 
 /*
@@ -65,8 +68,12 @@ function recuperarRuta(clave: string, defecto: string) {
   try { return window.sessionStorage.getItem(clave) || defecto; } catch { return defecto; }
 }
 
+const PANTALLAS_CONFIGURACION = ['__benches__', '__areas__', '__horario__', '__rescfg__', '__projects__', '__users__', '__billing_config__'];
+
 export function App() {
   const { vista, sesion, soloLectura, sincronizacion, copiaSinConexion, proyectos, personas } = usePlanificador();
+  // 📤 Foto de solo lectura: solo Dashboard, By Responsible, KPI History y los bancos de Thermal Benches.
+  const foto = fotoActiva();
   const [actual, setActual] = useState(leerRuta);
 
   useEffect(() => {
@@ -85,7 +92,8 @@ export function App() {
   const ir = (destino: string) => { window.location.hash = '/' + encodeURIComponent(destino); };
   const bancos = vista ? vista.grupos.flatMap((g) => g.bancos.map((b) => b.nombre)) : [];
   // Sin ruta se abre el Dashboard, como en la 4.9.4.
-  const pantalla = rutaPlanner(actual) || '__dash__';
+  const elegida = rutaPlanner(actual) || '__dash__';
+  const pantalla = foto && !['__dash__', '__resp__', '__kpihist__'].includes(elegida) && !bancos.includes(elegida) ? '__dash__' : elegida;
   const rutaTiming = leerRutaTiming(actual);
   const vistas = sesion ? vistasTiming(sesion) : [];
   const puedeTiming = vistas.length > 0;
@@ -111,6 +119,9 @@ export function App() {
       guardarRuta('tbp-ultima-planner', actual || '#/');
     }
   }, [actual, pantalla, vista, rutaTiming]);
+  // Hotfix: las pantallas de configuración no vuelven arriba al guardar un cambio.
+  const principal = useRef<HTMLElement>(null);
+  useConservarScroll(principal, PANTALLAS_CONFIGURACION.includes(pantalla));
   const esAdmin = !!sesion?.esAdmin;
   // Lab User (D55): todo lo de un Editor y, además, la gestión de las áreas, los bancos (D58) y el horario de los ensayos (D59).
   const esLabUser = sesion?.rol === 'labuser';
@@ -121,14 +132,16 @@ export function App() {
   const idsUsados = vista ? [...new Set(Object.values(vista.bancos).flatMap((fs) => fs.map((f) => String(f.datos.approvalId ?? ''))).filter(Boolean))] : [];
   const proyectosUsados = vista ? [...new Set([...proyectos, ...Object.values(vista.bancos).flatMap((fs) => fs.map((f) => String(f.datos.project ?? '')))].filter(Boolean))] : proyectos;
 
-  /** 📤 Export read-only: antes pregunta si se guarda la foto semanal, como la 4.9.4. */
+  /**
+   * 📤 Export read-only (D64): primero actualiza, sin preguntar, la foto semanal
+   * de KPI de esta semana (quien no puede editar exporta lo ya guardado), para
+   * que el fichero lleve el histórico al día.
+   */
   const exportarFotoSoloLectura = async () => {
     if (!vista) return;
     try {
-      if (window.confirm('Before exporting: dump this week\u2019s KPIs into the annual total (Update Yearly Status)?\n\nOK = save the yearly snapshot now.  Cancel = just export.')) {
-        await api.fotoSemanal().catch(() => undefined);
-      }
-      await exportarSoloLectura(vista.hoy);
+      if (!soloLectura) await api.fotoSemanal('export').catch(() => undefined);
+      await exportarSoloLectura(VERSION);
     } catch (e) {
       window.alert(`Could not export read-only snapshot: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -143,7 +156,7 @@ export function App() {
   };
 
   return (
-    <div className={[soloLectura && !rutaTiming ? 'ro' : '', puedeTiming ? 'tbp-dos-apps' : '', rutaTiming ? 'timing-shell' : ''].join(' ')}>
+    <div className={[soloLectura && !rutaTiming ? 'ro' : '', foto ? 'foto' : '', puedeTiming ? 'tbp-dos-apps' : '', rutaTiming ? 'timing-shell' : ''].join(' ')}>
       <header className={puedeTiming ? 'topbar topbar-apps' : 'topbar'}>
         <div className="logo-chip"><img src="/logo.png" alt="BorgWarner" /></div>
         {puedeTiming && <nav className="apps-selector" aria-label="Aplicaciones">
@@ -155,14 +168,14 @@ export function App() {
           {sesion && !rutaTiming && <span className={`role-pill ${sesion.rol}`}>{sesion.rol === 'readonly' ? 'Read only' : sesion.rol === 'labuser' ? 'Lab User' : sesion.rol}</span>}
         </h1>}
         <div className="spacer" />
-        {!sesion?.modoServidor && <a className="btn ghost sm no-print" href="/clasico" title="Interfaz 4.9.4 (respaldo)">Versión clásica</a>}
-        {!rutaTiming && <Presencia activa={!!sesion && !copiaSinConexion} />}
-        {esAdmin && vista && !rutaTiming && (
+        {!foto && !sesion?.modoServidor && <a className="btn ghost sm no-print" href="/clasico" title="Interfaz 4.9.4 (respaldo)">Versión clásica</a>}
+        {!rutaTiming && !foto && <Presencia activa={!!sesion && !copiaSinConexion} />}
+        {esAdmin && vista && !rutaTiming && !foto && (
           <button onClick={() => void exportarFotoSoloLectura()} title="Exportar una foto HTML de solo lectura para el proveedor">&#128228; Export read-only</button>
         )}
-        {!rutaTiming && <span id="sp-status" style={{ fontSize: 12, fontWeight: 600, color: colorSync, margin: '0 8px', whiteSpace: 'nowrap' }}>{textoSync}</span>}
+        {!rutaTiming && !foto && <span id="sp-status" style={{ fontSize: 12, fontWeight: 600, color: colorSync, margin: '0 8px', whiteSpace: 'nowrap' }}>{textoSync}</span>}
         {!rutaTiming && <button onClick={() => window.print()}>&#128424; Print</button>}
-        {sesion?.modoServidor && (rutaTiming ? <details className="timing-cuenta no-print">
+        {sesion?.modoServidor && !foto && (rutaTiming ? <details className="timing-cuenta no-print">
           <summary id="cuenta-nombre" title={sesion.email}>{sesion.nombre || sesion.email}</summary>
           <div className="timing-cuenta-menu">
             <a href="/cambiar-clave">Cambiar contraseña</a>
@@ -181,13 +194,17 @@ export function App() {
           </span>
         ))}
       </header>
-      <AvisoVersion version={VERSION} />
+      {!foto && <AvisoVersion version={VERSION} />}
+      {foto && (
+        <div className="ro-banner" id="ro-banner">&#128274; <b>READ-ONLY snapshot</b> &middot; Thermal Benches &middot; generated {fmt(dia(foto.generada) ?? new Date())}
+          {' '}{foto.generada.slice(11, 16)} (CW{semanaIso(dia(foto.generada) ?? new Date())}) &middot; data is embedded and cannot be changed</div>
+      )}
       {!rutaTiming && sincronizacion === 'bloqueado' && (
         <div id="lock-banner" style={{ display: 'block' }}>&#128274; <b>SIN CONEXI&Oacute;N CON SHAREPOINT</b> &middot; no se ha podido leer el servidor,
           as&iacute; que la app est&aacute; en <b>solo lectura</b> para proteger los datos. <b>No se guardar&aacute; nada.</b> Cierra y vuelve a abrir cuando tengas sesi&oacute;n.</div>
       )}
       {!rutaTiming && <AvisoSinConexion copia={copiaSinConexion} />}
-      {!rutaTiming && <Bienvenida sesion={sesion} />}
+      {!rutaTiming && !foto && <Bienvenida sesion={sesion} />}
       {rutaTiming ? <div className="layout timing-layout">
         {timingValido && sesion ? <>
           <nav className="timing-menu" aria-label="Timing R&T">
@@ -210,6 +227,7 @@ export function App() {
           {pestana('__resp__', <>&#128100; By Responsible</>)}
           {pestana('__kpihist__', <>&#128200; KPI History</>)}
           {vista && <MenuBancos vista={vista} pestana={pestana} />}
+          {!foto && <>
           <div className="grp-title">Additional Equipment</div>
           {pestana('__resources__', <>&#128203; List of Equipments</>)}
           {/* Facturación: módulo independiente de la planificación y de Settings. */}
@@ -227,8 +245,9 @@ export function App() {
           {esAdmin && pestana('__tools__', <>&#128295; Tools</>)}
           {pestana('__about__', <>&#8505;&#65039; About</>)}
           {esAdmin && pestana('__activity__', <>&#128220; Activity log</>)}
+          </>}
         </nav>
-        <main id="main">
+        <main id="main" ref={principal}>
           {!vista && sincronizacion !== 'bloqueado' && <div className="empty">Conectando&hellip;</div>}
           {vista && bancos.includes(pantalla) && (
             <div className="tbp-sin-marco"><VistaBanco banco={pantalla} onIrABanco={ir} /></div>
@@ -283,7 +302,7 @@ function MenuBancos({ vista, pestana }: { vista: Vista; pestana: (clave: string,
   return (
     <div className="menu-bancos">
       <div className="menu-sec">Test benches</div>
-      {conCategorias.length > 0 && (
+      {conCategorias.length > 0 && !fotoActiva() && (
         <select className="area-sel no-print" data-solo-nueva="" value={elegido} title="Show the benches of one area"
           onChange={(e) => setFiltro(e.target.value as 'ALL' | CodigoArea)}>
           <option value="ALL">All areas</option>

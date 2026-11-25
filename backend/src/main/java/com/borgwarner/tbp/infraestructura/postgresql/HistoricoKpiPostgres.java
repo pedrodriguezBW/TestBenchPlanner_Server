@@ -62,6 +62,7 @@ public class HistoricoKpiPostgres implements AlmacenHistoricoKpi {
             int creadas = 0, actualizadas = 0;
             for (ObjectNode foto : fotos) {
                 ObjectNode fila = FilaKpi.desdeFoto(foto);
+                FilaKpi.anadirOrigen(fila, foto);
                 fila.remove("Title");
                 Integer anio = entero(fila.get("Year"));
                 Integer cw = entero(fila.get("CW"));
