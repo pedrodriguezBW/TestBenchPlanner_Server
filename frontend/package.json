@@ -1,7 +1,7 @@
 {
   "name": "testbenchplanner-frontend",
   "private": true,
-  "version": "5.0.0",
+  "version": "5.4.0",
   "type": "module",
   "description": "Interfaz React de TestBenchPlanner (migración de la 4.9.4)",
   "scripts": {

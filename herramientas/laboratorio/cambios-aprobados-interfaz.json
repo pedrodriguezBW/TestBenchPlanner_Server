@@ -13,8 +13,8 @@
  },
  {
   "caso": "^UE21-",
-  "ruta": "^/hints/0$",
-  "motivo": "D26: la cabecera de About muestra la versión nueva (5.0.0) en lugar de 4.9.4 (build 494)."
+  "ruta": "^/",
+  "motivo": "D26 y D66: About muestra la versión nueva (5.4.0), Highlights y Changelog de la 5.x y el historial 4.x plegado, en lugar del contenido de la 4.9.4 (build 494)."
  },
  {
   "caso": "^UF16-",

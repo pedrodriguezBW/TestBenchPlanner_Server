@@ -13,7 +13,7 @@
 
     <groupId>com.borgwarner.tbp</groupId>
     <artifactId>testbenchplanner-backend</artifactId>
-    <version>5.0.0-SNAPSHOT</version>
+    <version>5.4.0-SNAPSHOT</version>
     <name>TestBenchPlanner · backend</name>
     <description>Backend Java de TestBenchPlanner (migración de la 4.9.4)</description>
 

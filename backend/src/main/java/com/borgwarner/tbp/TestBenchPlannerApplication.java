@@ -14,7 +14,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 public class TestBenchPlannerApplication {
 
     /** Versión de esta aplicación (la que se publica en TestBenchAppConfig al distribuirla). */
-    public static final String VERSION = "5.0.0";
+    public static final String VERSION = "5.4.0";
 
     public static void main(String[] args) {
         SpringApplication.run(TestBenchPlannerApplication.class, args);

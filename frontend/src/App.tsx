@@ -36,7 +36,7 @@ import type { Vista } from './api/tipos';
  * lateral y la pantalla elegida.
  */
 
-const VERSION = '5.0.0';
+const VERSION = '5.4.0';
 const WorkspaceTiming = lazy(() => import('./bloques/timing/WorkspaceTiming').then((m) => ({ default: m.WorkspaceTiming })));
 
 const SINCRONIZACION: Record<EstadoSincronizacion, [string, string]> = {
